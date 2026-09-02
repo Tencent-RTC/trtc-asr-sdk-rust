@@ -19,7 +19,7 @@ use crate::common::errors::{
     invalid_param, AsrError, Result, ERR_CODE_AUTH_FAILED, ERR_CODE_CONNECT_FAILED,
     ERR_CODE_READ_FAILED, ERR_CODE_SERVER_ERROR,
 };
-use crate::common::{sdkinfo, usersig, Credential};
+use crate::common::{resolve_http_endpoint, sdkinfo, usersig, Credential};
 
 /// Production HTTPS endpoint for sentence recognition.
 pub const SENTENCE_ENDPOINT: &str = "https://asr.cloud-rtc.com";
@@ -200,7 +200,7 @@ impl SentenceRecognizer {
     pub fn new(credential: Credential) -> Self {
         SentenceRecognizer {
             credential,
-            endpoint: SENTENCE_ENDPOINT.to_string(),
+            endpoint: String::new(),
             agent: ureq::AgentBuilder::new()
                 // Share the WebSocket transport's rustls config (ring +
                 // system roots): ureq's default aws-lc config is rejected by
@@ -255,7 +255,7 @@ impl SentenceRecognizer {
             .unwrap_or(0);
         let req_url = format!(
             "{}/v1/SentenceRecognition?AppId={}&Secretid={}&RequestId={}&Timestamp={}&{}",
-            self.endpoint,
+            resolve_http_endpoint(&self.endpoint, &self.credential.site)?,
             self.credential.app_id,
             self.credential.app_id,
             request_id,

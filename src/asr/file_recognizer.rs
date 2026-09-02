@@ -25,7 +25,7 @@ use crate::common::errors::{
     ERR_CODE_SERVER_ERROR, ERR_CODE_TIMEOUT,
 };
 use crate::common::signature::SpeakerRole;
-use crate::common::{sdkinfo, usersig, Credential};
+use crate::common::{resolve_http_endpoint, sdkinfo, usersig, Credential};
 
 use super::params::{validate_speaker_diarization, validate_vad_tuning};
 use super::sentence_recognizer::{read_http_response, ApiError, SOURCE_TYPE_DATA, SOURCE_TYPE_URL};
@@ -284,7 +284,7 @@ impl FileRecognizer {
     pub fn new(credential: Credential) -> Self {
         FileRecognizer {
             credential,
-            endpoint: FILE_ENDPOINT.to_string(),
+            endpoint: String::new(),
             agent: ureq::AgentBuilder::new()
                 // Same shared rustls config as the other transports; see
                 // common::tls for why the ureq default is rejected.
@@ -508,7 +508,7 @@ impl FileRecognizer {
         // this request path.
         let req_url = format!(
             "{}{}?AppId={}&Secretid={}&RequestId={}&Timestamp={}&{}",
-            self.endpoint,
+            resolve_http_endpoint(&self.endpoint, &self.credential.site)?,
             path,
             self.credential.app_id,
             self.credential.app_id,

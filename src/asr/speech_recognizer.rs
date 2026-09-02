@@ -43,7 +43,7 @@ use crate::common::errors::{
     ERR_CODE_NOT_STARTED, ERR_CODE_READ_FAILED, ERR_CODE_WRITE_FAILED,
 };
 use crate::common::signature::{SignatureParams, SpeakerRole};
-use crate::common::{usersig, Credential};
+use crate::common::{resolve_ws_endpoint, usersig, Credential};
 
 use super::params::{validate_enum_option, validate_speaker_diarization, validate_vad_tuning};
 use super::types::SpeechRecognitionResponse;
@@ -279,7 +279,7 @@ impl SpeechRecognizer {
         SpeechRecognizer {
             credential,
             listener,
-            endpoint: ENDPOINT.to_string(),
+            endpoint: String::new(),
             engine_model_type: engine_model_type.into(),
             voice_format: 1, // PCM
             need_vad: 1,
@@ -747,7 +747,8 @@ impl SpeechRecognizer {
 
         let query = p.build_query_string_with_signature(&user_sig);
         // URL path uses the Tencent Cloud AppID (not SdkAppID).
-        let ws_url = format!("{}/asr/v2/{}?{}", self.endpoint, self.credential.app_id, query);
+        let base = resolve_ws_endpoint(&self.endpoint, &self.credential.site)?;
+        let ws_url = format!("{}/asr/v2/{}?{}", base, self.credential.app_id, query);
 
         let (ws, shutdown) = connect_ws(
             &ws_url,

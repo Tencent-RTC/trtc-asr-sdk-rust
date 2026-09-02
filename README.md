@@ -46,7 +46,8 @@ impl SpeechRecognitionListener for Printer {
     }
 }
 
-let credential = Credential::new(app_id, sdk_app_id, "your-sdk-secret-key");
+let mut credential = Credential::new(app_id, sdk_app_id, "your-sdk-secret-key");
+// credential.set_site(trtc_asr_sdk::common::SITE_INTL); // 国际站；须在构造识别器之前调用
 let mut recognizer = SpeechRecognizer::new(credential, "16k_zh", Arc::new(Printer));
 
 // 可选配置（全部在 start 前调用）：

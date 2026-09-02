@@ -12,6 +12,7 @@
 
 ### 新增
 
+- Credential 可通过 `set_site` 选择国内站（默认，`asr.cloud-rtc.com`）或国际站（`asr-intl.cloud-rtc.com`），三个识别器共用（须在构造识别器之前设置）
 - 实时语音识别（WebSocket），支持流式写入与优雅停止
 - 一句话识别（HTTP）
 - 录音文件识别（异步 HTTP，CreateRecTask + DescribeTaskStatus）

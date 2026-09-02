@@ -7,7 +7,10 @@ pub mod signature;
 pub(crate) mod tls;
 pub mod usersig;
 
-pub use credential::Credential;
+pub use credential::{
+    host_for_site, http_endpoint_for_site, resolve_http_endpoint, resolve_ws_endpoint,
+    ws_endpoint_for_site, Credential, HOST_CN, HOST_INTL, SITE_CN, SITE_INTL,
+};
 pub use errors::{AsrError, Result};
 pub use sdkinfo::{
     sdk_platform, sdk_report_params, sdk_report_query, SDK_LANGUAGE, SDK_TYPE, SDK_VERSION,

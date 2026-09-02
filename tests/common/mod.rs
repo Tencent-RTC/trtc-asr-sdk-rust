@@ -205,11 +205,12 @@ impl MockWsServer {
         let handle = thread::spawn(move || {
             if let Ok((stream, _)) = listener.accept() {
                 let captured = Arc::clone(&t2);
-                let cb = move |req: &tungstenite::handshake::server::Request,
-                               resp: tungstenite::handshake::server::Response| {
-                    *captured.lock().unwrap() = Some(req.uri().to_string());
-                    Ok(resp)
-                };
+                let cb =
+                    move |req: &tungstenite::handshake::server::Request,
+                          resp: tungstenite::handshake::server::Response| {
+                        *captured.lock().unwrap() = Some(req.uri().to_string());
+                        Ok(resp)
+                    };
                 if let Ok(ws) = tungstenite::accept_hdr(stream, cb) {
                     handler(ws);
                 }

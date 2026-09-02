@@ -25,7 +25,7 @@ use crate::common::errors::{
     ERR_CODE_SERVER_ERROR, ERR_CODE_TIMEOUT,
 };
 use crate::common::signature::SpeakerRole;
-use crate::common::{usersig, Credential};
+use crate::common::{sdkinfo, usersig, Credential};
 
 use super::params::{validate_speaker_diarization, validate_vad_tuning};
 use super::sentence_recognizer::{read_http_response, ApiError, SOURCE_TYPE_DATA, SOURCE_TYPE_URL};
@@ -504,9 +504,17 @@ impl FileRecognizer {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
+        // Applies to both CreateRecTask and DescribeTaskStatus, which share
+        // this request path.
         let req_url = format!(
-            "{}{}?AppId={}&Secretid={}&RequestId={}&Timestamp={}",
-            self.endpoint, path, self.credential.app_id, self.credential.app_id, request_id, now
+            "{}{}?AppId={}&Secretid={}&RequestId={}&Timestamp={}&{}",
+            self.endpoint,
+            path,
+            self.credential.app_id,
+            self.credential.app_id,
+            request_id,
+            now,
+            sdkinfo::sdk_report_query()
         );
 
         let http_resp = self

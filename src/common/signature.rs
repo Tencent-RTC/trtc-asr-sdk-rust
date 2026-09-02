@@ -99,7 +99,11 @@ pub struct SignatureParams {
 
 impl SignatureParams {
     /// Creates parameters with sensible defaults.
-    pub fn new(app_id: i64, engine_model_type: impl Into<String>, voice_id: impl Into<String>) -> Self {
+    pub fn new(
+        app_id: i64,
+        engine_model_type: impl Into<String>,
+        voice_id: impl Into<String>,
+    ) -> Self {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
@@ -158,10 +162,19 @@ impl SignatureParams {
         m.insert("timestamp".to_string(), self.timestamp.to_string());
         m.insert("expired".to_string(), self.expired.to_string());
         m.insert("nonce".to_string(), self.nonce.to_string());
-        m.insert("engine_model_type".to_string(), self.engine_model_type.clone());
+        m.insert(
+            "engine_model_type".to_string(),
+            self.engine_model_type.clone(),
+        );
         m.insert("voice_id".to_string(), self.voice_id.clone());
         m.insert("voice_format".to_string(), self.voice_format.to_string());
         m.insert("needvad".to_string(), self.need_vad.to_string());
+
+        // SDK self-identification for server-side diagnostics. Not part of the
+        // signature (the signature is the UserSig), so it is safe to append.
+        for (k, v) in crate::common::sdkinfo::sdk_report_params() {
+            m.insert(k.to_string(), v.to_string());
+        }
 
         if self.sdk_app_id > 0 {
             m.insert("sdkappid".to_string(), self.sdk_app_id.to_string());
@@ -173,7 +186,10 @@ impl SignatureParams {
             m.insert("hotword_list".to_string(), self.hotword_list.clone());
         }
         if !self.customization_id.is_empty() {
-            m.insert("customization_id".to_string(), self.customization_id.clone());
+            m.insert(
+                "customization_id".to_string(),
+                self.customization_id.clone(),
+            );
         }
         if !self.replace_text_id.is_empty() {
             m.insert("replace_text_id".to_string(), self.replace_text_id.clone());
@@ -191,19 +207,31 @@ impl SignatureParams {
             m.insert("filter_empty_result".to_string(), v.to_string());
         }
         if self.convert_num_mode != 0 {
-            m.insert("convert_num_mode".to_string(), self.convert_num_mode.to_string());
+            m.insert(
+                "convert_num_mode".to_string(),
+                self.convert_num_mode.to_string(),
+            );
         }
         if self.word_info != 0 {
             m.insert("word_info".to_string(), self.word_info.to_string());
         }
         if self.vad_silence_time != 0 {
-            m.insert("vad_silence_time".to_string(), self.vad_silence_time.to_string());
+            m.insert(
+                "vad_silence_time".to_string(),
+                self.vad_silence_time.to_string(),
+            );
         }
         if self.max_speak_time != 0 {
-            m.insert("max_speak_time".to_string(), self.max_speak_time.to_string());
+            m.insert(
+                "max_speak_time".to_string(),
+                self.max_speak_time.to_string(),
+            );
         }
         if self.input_sample_rate != 0 {
-            m.insert("input_sample_rate".to_string(), self.input_sample_rate.to_string());
+            m.insert(
+                "input_sample_rate".to_string(),
+                self.input_sample_rate.to_string(),
+            );
         }
         // vad_level / noise_threshold are tri-state: an explicit 0 differs
         // from "not configured" (the server defaults vad_level to 1), so they
@@ -221,7 +249,10 @@ impl SignatureParams {
                 self.speaker_diarization.to_string(),
             );
             if self.speaker_number != 0 {
-                m.insert("speaker_number".to_string(), self.speaker_number.to_string());
+                m.insert(
+                    "speaker_number".to_string(),
+                    self.speaker_number.to_string(),
+                );
             }
         }
         // speaker_roles / voiceprintids only apply to voiceprint mode.

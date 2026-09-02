@@ -1,0 +1,38 @@
+[package]
+name = "trtc-asr-sdk"
+version = "0.1.0"
+edition = "2021"
+description = "TRTC ASR SDK for Rust: realtime (WebSocket), one-shot sentence, and async file recognition"
+license = "MIT"
+# Test doubles (mock servers) stay out of published source packages.
+exclude = ["tests/", "build/", "target/"]
+
+[lib]
+name = "trtc_asr_sdk"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hmac = "0.12"
+sha2 = "0.10"
+flate2 = "1"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
+rand = "0.8"
+tungstenite = "0.26"
+native-tls = "0.2"
+ureq = "2.12"
+url = "2"
+
+[[example]]
+name = "realtime_asr"
+path = "examples/realtime_asr.rs"
+
+[[example]]
+name = "sentence_asr"
+path = "examples/sentence_asr.rs"
+
+[[example]]
+name = "file_asr"
+path = "examples/file_asr.rs"

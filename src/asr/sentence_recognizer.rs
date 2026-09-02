@@ -202,6 +202,11 @@ impl SentenceRecognizer {
             credential,
             endpoint: SENTENCE_ENDPOINT.to_string(),
             agent: ureq::AgentBuilder::new()
+                // Share the WebSocket transport's rustls config (ring +
+                // system roots): ureq's default aws-lc config is rejected by
+                // this server family with "received corrupt message of type
+                // InvalidContentType".
+                .tls_config(crate::common::tls::rustls_client_config())
                 .timeout(Duration::from_secs(30))
                 .build(),
         }
@@ -214,7 +219,10 @@ impl SentenceRecognizer {
 
     /// Overrides the HTTP timeout (default 30s).
     pub fn set_timeout(&mut self, timeout: Duration) {
-        self.agent = ureq::AgentBuilder::new().timeout(timeout).build();
+        self.agent = ureq::AgentBuilder::new()
+            .tls_config(crate::common::tls::rustls_client_config())
+            .timeout(timeout)
+            .build();
     }
 
     /// Sends a sentence recognition request and returns the result.

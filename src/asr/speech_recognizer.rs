@@ -99,7 +99,7 @@ pub trait SpeechRecognitionListener: Send + Sync {
 /// TLS-wrapped TCP for `wss://`.
 enum Stream {
     Plain(TcpStream),
-    Tls(native_tls::TlsStream<TcpStream>),
+    Tls(rustls::StreamOwned<rustls::ClientConnection, TcpStream>),
 }
 
 impl Read for Stream {
@@ -857,6 +857,12 @@ fn read_loop_inner(
     }, &|l, r| l.on_recognition_start(r));
 
     loop {
+        // The ws mutex is shared with the writer (audio frames / end signal).
+        // After a poll timeout the reader would otherwise re-acquire it
+        // instantly and starve the writer (unfair mutexes favor the
+        // just-unlocked thread); yielding here gives waiting writers a
+        // window. Cost is negligible against the 100ms poll interval.
+        thread::yield_now();
         let read_result = {
             let mut guard = shared.ws.lock().unwrap();
             match guard.as_mut() {
@@ -1123,13 +1129,13 @@ fn connect_ws(
         .map_err(|e| AsrError::new(ERR_CODE_CONNECT_FAILED, format!("clone socket failed: {e}")))?;
 
     let stream = if secure {
-        let connector = native_tls::TlsConnector::new().map_err(|e| {
-            AsrError::new(ERR_CODE_CONNECT_FAILED, format!("tls connector init failed: {e}"))
+        let config = crate::common::tls::rustls_client_config();
+        let server_name = rustls::pki_types::ServerName::try_from(host.to_owned())
+            .map_err(|e| AsrError::new(ERR_CODE_CONNECT_FAILED, format!("invalid tls server name: {e}")))?;
+        let conn = rustls::ClientConnection::new(config, server_name).map_err(|e| {
+            AsrError::new(ERR_CODE_CONNECT_FAILED, format!("tls connection init failed: {e}"))
         })?;
-        let tls = connector.connect(host, tcp).map_err(|e| {
-            AsrError::new(ERR_CODE_CONNECT_FAILED, format!("tls handshake failed: {e}"))
-        })?;
-        Stream::Tls(tls)
+        Stream::Tls(rustls::StreamOwned::new(conn, tcp))
     } else {
         Stream::Plain(tcp)
     };

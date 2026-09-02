@@ -286,6 +286,9 @@ impl FileRecognizer {
             credential,
             endpoint: FILE_ENDPOINT.to_string(),
             agent: ureq::AgentBuilder::new()
+                // Same shared rustls config as the other transports; see
+                // common::tls for why the ureq default is rejected.
+                .tls_config(crate::common::tls::rustls_client_config())
                 .timeout(Duration::from_secs(60))
                 .build(),
         }
@@ -298,7 +301,10 @@ impl FileRecognizer {
 
     /// Overrides the HTTP timeout (default 60s).
     pub fn set_timeout(&mut self, timeout: Duration) {
-        self.agent = ureq::AgentBuilder::new().timeout(timeout).build();
+        self.agent = ureq::AgentBuilder::new()
+            .tls_config(crate::common::tls::rustls_client_config())
+            .timeout(timeout)
+            .build();
     }
 
     /// Submits an audio file recognition task and returns the task ID.

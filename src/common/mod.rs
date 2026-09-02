@@ -3,6 +3,7 @@
 pub mod credential;
 pub mod errors;
 pub mod signature;
+pub(crate) mod tls;
 pub mod usersig;
 
 pub use credential::Credential;

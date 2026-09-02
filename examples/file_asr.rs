@@ -1,7 +1,7 @@
 //! Async file recognition example (long audio, <= 12h).
 //!
 //! Credentials come from environment variables:
-//!   TRTC_APP_ID, TRTC_SDK_APP_ID, TRTC_SECRET_KEY
+//!   TRTC_ASR_APP_ID, TRTC_ASR_SDK_APP_ID, TRTC_ASR_SECRET_KEY
 //!
 //! Usage:
 //!   cargo run --example file_asr -- <audio.pcm>          # local file
@@ -20,9 +20,9 @@ fn main() {
     }
 
     let credential = Credential::new(
-        env::var("TRTC_APP_ID").expect("TRTC_APP_ID").parse().expect("TRTC_APP_ID must be an integer"),
-        env::var("TRTC_SDK_APP_ID").expect("TRTC_SDK_APP_ID").parse().expect("TRTC_SDK_APP_ID must be an integer"),
-        env::var("TRTC_SECRET_KEY").expect("TRTC_SECRET_KEY"),
+        env::var("TRTC_ASR_APP_ID").expect("TRTC_ASR_APP_ID").parse().expect("TRTC_ASR_APP_ID must be an integer"),
+        env::var("TRTC_ASR_SDK_APP_ID").expect("TRTC_ASR_SDK_APP_ID").parse().expect("TRTC_ASR_SDK_APP_ID must be an integer"),
+        env::var("TRTC_ASR_SECRET_KEY").expect("TRTC_ASR_SECRET_KEY"),
     );
 
     let recognizer = FileRecognizer::new(credential);

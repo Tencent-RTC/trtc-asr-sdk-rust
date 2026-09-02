@@ -21,7 +21,12 @@ base64 = "0.22"
 uuid = { version = "1", features = ["v4"] }
 rand = "0.8"
 tungstenite = "0.26"
-native-tls = "0.2"
+# rustls instead of native-tls: SecureTransport (macOS native-tls) fails
+# against the production endpoint with "record overflow" on its certificate
+# chain. ring provider keeps the build cmake-free; system roots are loaded
+# via rustls-native-certs.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-native-certs = "0.8"
 ureq = "2.12"
 url = "2"
 

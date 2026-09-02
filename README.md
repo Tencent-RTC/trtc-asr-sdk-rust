@@ -104,9 +104,9 @@ cargo test
 ## 示例
 
 ```bash
-export TRTC_APP_ID=13xxxxxxxx
-export TRTC_SDK_APP_ID=14xxxxxxxx
-export TRTC_SECRET_KEY=your-sdk-secret-key
+export TRTC_ASR_APP_ID=13xxxxxxxx
+export TRTC_ASR_SDK_APP_ID=14xxxxxxxx
+export TRTC_ASR_SECRET_KEY=your-sdk-secret-key
 
 cargo run --example realtime_asr -- path/to/audio.pcm
 cargo run --example sentence_asr -- path/to/audio.pcm pcm 16k_zh_en

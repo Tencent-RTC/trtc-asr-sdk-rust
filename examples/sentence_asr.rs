@@ -1,7 +1,7 @@
 //! One-shot sentence recognition example (audio <= 60s).
 //!
 //! Credentials come from environment variables:
-//!   TRTC_APP_ID, TRTC_SDK_APP_ID, TRTC_SECRET_KEY
+//!   TRTC_ASR_APP_ID, TRTC_ASR_SDK_APP_ID, TRTC_ASR_SECRET_KEY
 //!
 //! Usage: cargo run --example sentence_asr -- <audio.pcm> [format] [engine]
 
@@ -21,9 +21,9 @@ fn main() {
     let engine = args.get(3).map(String::as_str).unwrap_or("16k_zh_en");
 
     let credential = Credential::new(
-        env::var("TRTC_APP_ID").expect("TRTC_APP_ID").parse().expect("TRTC_APP_ID must be an integer"),
-        env::var("TRTC_SDK_APP_ID").expect("TRTC_SDK_APP_ID").parse().expect("TRTC_SDK_APP_ID must be an integer"),
-        env::var("TRTC_SECRET_KEY").expect("TRTC_SECRET_KEY"),
+        env::var("TRTC_ASR_APP_ID").expect("TRTC_ASR_APP_ID").parse().expect("TRTC_ASR_APP_ID must be an integer"),
+        env::var("TRTC_ASR_SDK_APP_ID").expect("TRTC_ASR_SDK_APP_ID").parse().expect("TRTC_ASR_SDK_APP_ID must be an integer"),
+        env::var("TRTC_ASR_SECRET_KEY").expect("TRTC_ASR_SECRET_KEY"),
     );
 
     let data = std::fs::read(path).expect("read audio file");

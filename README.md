@@ -2,7 +2,7 @@
 
 基于 TRTC 鉴权体系的语音识别（ASR）Rust SDK，支持实时语音识别（WebSocket）、一句话识别（HTTP）和录音文件识别（异步 HTTP）三种模式。
 
-> 其他语言 SDK：[Go](https://github.com/hydah/trtc-asr-sdk-go) | [Python](https://github.com/hydah/trtc-asr-sdk-python) | [Node.js](https://github.com/hydah/trtc-asr-sdk-nodejs) | [Java](https://github.com/hydah/trtc-asr-sdk-java) | [C++](https://github.com/hydah/trtc-asr-sdk-cpp)
+> 其他语言 SDK：[Go](https://github.com/Tencent-RTC/trtc-asr-sdk-go) | [Python](https://github.com/Tencent-RTC/trtc-asr-sdk-python) | [Node.js](https://github.com/Tencent-RTC/trtc-asr-sdk-nodejs) | [Java](https://github.com/Tencent-RTC/trtc-asr-sdk-java) | [C++](https://github.com/Tencent-RTC/trtc-asr-sdk-cpp)
 
 ## 前提条件
 

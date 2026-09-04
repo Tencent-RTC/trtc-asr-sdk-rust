@@ -130,7 +130,7 @@ fn handshake_sends_auth_query_params() {
     r.set_voice_id("voice-handshake");
     r.start().expect("start");
 
-    assert!(wait_until(Duration::from_secs(2), || {
+    assert!(wait_until(Duration::from_secs(10), || {
         server.request_target.lock().unwrap().is_some()
     }));
     let target = server.request_target.lock().unwrap().clone().unwrap();
@@ -261,7 +261,7 @@ fn server_error_triggers_on_fail_and_stops() {
     let r = recognizer(listener, &server);
     r.start().expect("start");
 
-    assert!(wait_until(Duration::from_secs(2), || {
+    assert!(wait_until(Duration::from_secs(10), || {
         RecordingListener::count(&l.fail_count) == 1
     }));
     let events = l.events.lock().unwrap().clone();
@@ -293,7 +293,7 @@ fn final_with_slice_zero_only_completes() {
     let r = recognizer(listener, &server);
     r.start().expect("start");
 
-    assert!(wait_until(Duration::from_secs(2), || {
+    assert!(wait_until(Duration::from_secs(10), || {
         RecordingListener::count(&l.complete_count) == 1
     }));
     assert_eq!(RecordingListener::count(&l.sentence_begin_count), 0);
@@ -328,7 +328,7 @@ fn malformed_frame_is_non_terminal() {
     let r = recognizer(listener, &server);
     r.start().expect("start");
 
-    assert!(wait_until(Duration::from_secs(2), || {
+    assert!(wait_until(Duration::from_secs(10), || {
         RecordingListener::count(&l.change_count) == 1
     }));
     // One non-terminal OnFail for the malformed frame, session continues.
@@ -460,7 +460,7 @@ fn listener_panic_is_recovered_and_reported() {
     r.set_endpoint(&server.url);
     r.start().expect("start");
 
-    assert!(wait_until(Duration::from_secs(2), || {
+    assert!(wait_until(Duration::from_secs(10), || {
         RecordingListener::count(&l.inner.fail_count) == 1
     }));
     let events = l.inner.events.lock().unwrap().clone();
@@ -518,7 +518,7 @@ fn stop_waits_for_slow_terminal_callback_beyond_timeout() {
 
     let mut r = SpeechRecognizer::new(test_credential(), "16k_zh_en", listener);
     r.set_endpoint(&server.url);
-    r.set_stop_timeout(Duration::from_secs(1)); // terminal callback will outlive this
+    r.set_stop_timeout(Duration::from_secs(2)); // terminal callback will outlive this
     r.start().unwrap();
 
     let stop_returned = Arc::new(AtomicBool::new(false));
@@ -530,8 +530,8 @@ fn stop_waits_for_slow_terminal_callback_beyond_timeout() {
 
     // Wait until the terminal callback is running, then let it exceed the
     // stop timeout.
-    assert!(wait_until(Duration::from_secs(3), || entered.load(Ordering::SeqCst)));
-    std::thread::sleep(Duration::from_millis(1500));
+    assert!(wait_until(Duration::from_secs(10), || entered.load(Ordering::SeqCst)));
+    std::thread::sleep(Duration::from_millis(3000));
     assert!(
         !stop_returned.load(Ordering::SeqCst),
         "stop returned while the terminal callback was still running past stop timeout"

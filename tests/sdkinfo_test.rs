@@ -113,7 +113,7 @@ fn speech_recognizer_handshake_reports_sdk_identity() {
     r.set_stop_timeout(Duration::from_secs(2));
     r.start().expect("start");
 
-    assert!(wait_until(Duration::from_secs(2), || {
+    assert!(wait_until(Duration::from_secs(10), || {
         server.request_target.lock().unwrap().is_some()
     }));
     let target = server.request_target.lock().unwrap().clone().unwrap();

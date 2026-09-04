@@ -12,6 +12,12 @@
 - 仓库迁移至 `github.com/Tencent-RTC/trtc-asr-sdk-rust`，功能与 API 无任何变化。
   旧仓库保留 `v1.0.0` 并归档，不再更新。
 
+### 修复
+
+- 并发生命周期测试去抖：`stop_waits_for_slow_terminal_callback_beyond_timeout`
+  等测试在 CPU 饥饿环境（GitHub ubuntu runner）偶发 exit 101。同步等待预算统一
+  放宽到 10s，`stop_timeout` 1s→2s；1-CPU 容器内从约 50% 失败率降至 3/3 通过。
+
 ## [1.0.0] - 2026-09-02
 
 首个正式版本。

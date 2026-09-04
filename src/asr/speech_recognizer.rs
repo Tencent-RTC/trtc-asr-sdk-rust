@@ -65,6 +65,15 @@ const DEFAULT_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 const MIN_WRITE_TIMEOUT: Duration = Duration::from_millis(50);
 const MAX_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 
+// Liveness backstop for the end-signal handoff (see
+// `Shared::wait_for_end_signal_until`). Sized so a healthy `stop` never hits
+// it under any allowed configuration: reaching the wire costs at most one
+// in-flight audio write plus `stop`'s own send, each bounded by the socket
+// write timeout, plus a margin for scheduling and TLS flush on a starved CPU.
+// It only matters when `stop` dies in between.
+const END_SIGNAL_HANDOFF_TIMEOUT: Duration =
+    Duration::from_secs(2 * MAX_WRITE_TIMEOUT.as_secs() + 5);
+
 // Stop-timeout bounds: caps how long `stop` waits for the server's final
 // response after the end signal before forcing the connection closed.
 const DEFAULT_STOP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -144,6 +153,20 @@ struct Shared {
     /// External `stop` callers then wait for `done` without a timeout so the
     /// terminal callbacks can finish.
     terminal_received: AtomicBool,
+    /// Set after `stop` writes its end signal. Once stopping begins, the
+    /// reader waits for this handoff instead of racing `stop` to re-acquire
+    /// the WebSocket mutex after each polling read.
+    end_signal_sent: AtomicBool,
+    /// Sticky flag raised when a handoff hit its liveness deadline. From then
+    /// on the reader stops yielding the socket: nobody is going to publish
+    /// the end frame any more, and re-arming the deadline every round would
+    /// leave the connection unattended for most of the session.
+    handoff_expired: AtomicBool,
+    /// Test-only acknowledgement that a reader has checked the handoff
+    /// predicate while holding done.0 and is about to wait on its Condvar.
+    /// This makes the lost-wakeup regression tests deterministic.
+    #[cfg(test)]
+    handoff_waiting: AtomicBool,
     /// Thread ID of the reader thread, used to detect re-entrant `stop` calls
     /// from listener callbacks (cleaner than Go's stack walking).
     reader_tid: Mutex<Option<thread::ThreadId>>,
@@ -164,13 +187,27 @@ impl Shared {
 }
 
 impl Shared {
+    /// Publishes a terminal state while holding the mutex associated with the
+    /// lifecycle condition variable. Every predicate consumed by a condvar
+    /// wait must be changed under that same mutex; otherwise a reader can
+    /// observe the old predicate and miss the notification.
+    fn mark_stopped_and_wake(&self) {
+        {
+            let _guard = self.done.0.lock().unwrap();
+            self.state.store(STATE_STOPPED, Ordering::SeqCst);
+        }
+        self.done.1.notify_all();
+    }
+
     /// Advances the recognizer to the terminal stopped state exactly once and
     /// closes the connection. Invoked before terminal callbacks (so a
     /// `stop`/`write` from inside a callback returns immediately) and again
     /// from the reader thread's exit path as a catch-all.
     fn finish(&self) {
         self.finish_once.call_once(|| {
-            self.state.store(STATE_STOPPED, Ordering::SeqCst);
+            self.mark_stopped_and_wake();
+            // Do not hold done.0 while closing: close() takes the socket
+            // mutex, whereas the reader releases done.0 before taking it.
             self.close();
         });
     }
@@ -206,6 +243,64 @@ impl Shared {
             self.terminal_received.store(true, Ordering::SeqCst);
         }
         self.done.1.notify_all();
+    }
+
+    /// Publishes that stop() has placed the end frame on the wire. The done
+    /// mutex makes the flag update and reader's condition wait atomic with
+    /// respect to the notification.
+    fn mark_end_signal_sent(&self) {
+        {
+            let _guard = self.done.0.lock().unwrap();
+            self.end_signal_sent.store(true, Ordering::SeqCst);
+        }
+        self.done.1.notify_all();
+    }
+
+    /// Once a caller transitions RUNNING -> STOPPING, give that caller the
+    /// WebSocket mutex until it writes the end frame. Without this handoff the
+    /// polling reader can repeatedly re-acquire the mutex after a timeout and
+    /// starve stop() long enough to lose the server's final response.
+    ///
+    /// Returns false when the session became terminal before an end frame was
+    /// sent, in which case the reader must exit rather than acquire the socket.
+    fn wait_for_end_signal_if_stopping(&self) -> bool {
+        self.wait_for_end_signal_until(std::time::Instant::now() + END_SIGNAL_HANDOFF_TIMEOUT)
+    }
+
+    /// Handoff body with an injectable deadline (tests use a short one).
+    ///
+    /// The deadline is a liveness backstop, not part of the protocol: if
+    /// stop() dies between the state transition and the end frame, nobody
+    /// will ever publish a predicate change, and an unbounded wait would park
+    /// the reader forever with the socket unattended. Expiry is sticky, so on
+    /// the next round the reader is back to plain polling rather than
+    /// stalling once per deadline.
+    fn wait_for_end_signal_until(&self, deadline: std::time::Instant) -> bool {
+        let (done_lock, cvar) = &self.done;
+        let mut guard = done_lock.lock().unwrap();
+        while self.state() == STATE_STOPPING
+            && !self.end_signal_sent.load(Ordering::SeqCst)
+            && !self.handoff_expired.load(Ordering::SeqCst)
+        {
+            // Absolute deadline: spurious wakes must not extend the handoff.
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                self.handoff_expired.store(true, Ordering::SeqCst);
+                break;
+            }
+            // The flag is set while done.0 is held. A test that observes it
+            // and then calls mark_end_signal_sent()/finish() cannot notify
+            // before Condvar::wait atomically releases done.0 and parks.
+            #[cfg(test)]
+            self.handoff_waiting.store(true, Ordering::SeqCst);
+            let (g, _) = cvar.wait_timeout(guard, deadline - now).unwrap();
+            guard = g;
+            #[cfg(test)]
+            self.handoff_waiting.store(false, Ordering::SeqCst);
+        }
+        #[cfg(test)]
+        self.handoff_waiting.store(false, Ordering::SeqCst);
+        self.state() != STATE_STOPPED
     }
 
     fn state(&self) -> u8 {
@@ -312,6 +407,10 @@ impl SpeechRecognizer {
                 shutdown: Mutex::new(None),
                 done: (Mutex::new(false), Condvar::new()),
                 terminal_received: AtomicBool::new(false),
+                end_signal_sent: AtomicBool::new(false),
+                handoff_expired: AtomicBool::new(false),
+                #[cfg(test)]
+                handoff_waiting: AtomicBool::new(false),
                 reader_tid: Mutex::new(None),
                 stop_timeout: Mutex::new(DEFAULT_STOP_TIMEOUT),
                 finish_once: Once::new(),
@@ -614,49 +713,63 @@ impl SpeechRecognizer {
     /// for non-terminal callbacks it sends the end signal and returns without
     /// waiting (waiting would self-block: callbacks run on the reader thread).
     pub fn stop(&self) -> Result<()> {
-        let cas = self.shared.state.compare_exchange(
-            STATE_RUNNING,
-            STATE_STOPPING,
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-        );
+        // State changes that participate in the reader's end-signal Condvar
+        // handoff are made under done.0, the mutex associated with that
+        // condition variable. This prevents a reader from missing STOPPING.
+        let cas = {
+            let _guard = self.shared.done.0.lock().unwrap();
+            self.shared.state.compare_exchange(
+                STATE_RUNNING,
+                STATE_STOPPING,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+        };
         if cas.is_err() {
             return Err(AsrError::new(ERR_CODE_NOT_STARTED, "recognizer not running"));
         }
+        self.shared.done.1.notify_all();
 
-        let send_result = {
+        // Keep connection-missing distinct from a natural terminal finish:
+        // both appear as no send result, but only the former is an API error.
+        let (send_result, connection_missing) = {
             let mut guard = self.shared.ws.lock().unwrap();
             match guard.as_mut() {
-                None => {
-                    self.shared.state.store(STATE_STOPPED, Ordering::SeqCst);
-                    return Err(AsrError::new(
-                        ERR_CODE_NOT_STARTED,
-                        "connection not established",
-                    ));
-                }
-                Some(ws) => {
-                    // If the session finished naturally while we waited for an
-                    // in-flight writer, skip the end signal entirely.
-                    if self.shared.state() == STATE_STOPPED {
-                        None
-                    } else {
-                        Some(ws.send(Message::Text(r#"{"type":"end"}"#.into())))
-                    }
-                }
+                None if self.shared.state() == STATE_STOPPED => (None, false),
+                None => (None, true),
+                Some(_) if self.shared.state() == STATE_STOPPED => (None, false),
+                Some(ws) => (Some(ws.send(Message::Text(r#"{"type":"end"}"#.into()))), false),
             }
         };
 
+        if connection_missing {
+            self.shared.finish();
+            return Err(AsrError::new(
+                ERR_CODE_NOT_STARTED,
+                "connection not established",
+            ));
+        }
+
+        let end_frame_written = matches!(&send_result, Some(Ok(())));
         if let Some(Err(e)) = send_result {
             if self.shared.state() == STATE_STOPPED {
                 self.wait_for_read_loop_or_close();
                 return Ok(());
             }
-            self.shared.close();
-            self.shared.state.store(STATE_STOPPED, Ordering::SeqCst);
+            self.shared.finish();
             return Err(AsrError::new(
                 ERR_CODE_WRITE_FAILED,
                 format!("send end signal failed: {e}"),
             ));
+        }
+        if end_frame_written {
+            self.shared.mark_end_signal_sent();
+        } else {
+            // The reader reached a terminal state while stop() was waiting
+            // for the WebSocket writer. Preserve the callback completion
+            // guarantee before reporting success.
+            self.wait_for_read_loop_or_close();
+            return Ok(());
         }
 
         // If stop is called from within a listener callback (which runs on
@@ -670,7 +783,7 @@ impl SpeechRecognizer {
         }
 
         self.wait_for_read_loop_or_close();
-        self.shared.state.store(STATE_STOPPED, Ordering::SeqCst);
+        self.shared.finish();
         Ok(())
     }
 
@@ -858,12 +971,13 @@ fn read_loop_inner(
     }, &|l, r| l.on_recognition_start(r));
 
     loop {
-        // The ws mutex is shared with the writer (audio frames / end signal).
-        // After a poll timeout the reader would otherwise re-acquire it
-        // instantly and starve the writer (unfair mutexes favor the
-        // just-unlocked thread); yielding here gives waiting writers a
-        // window. Cost is negligible against the 100ms poll interval.
+        // Give ordinary audio writers a chance after a polling read. For a
+        // pending Stop, the explicit end-signal handoff below is stronger:
+        // this reader waits outside ws until stop() has written the end frame.
         thread::yield_now();
+        if !shared.wait_for_end_signal_if_stopping() {
+            return;
+        }
         let read_result = {
             let mut guard = shared.ws.lock().unwrap();
             match guard.as_mut() {
@@ -1156,4 +1270,134 @@ fn connect_ws(
         .map_err(|e| AsrError::new(ERR_CODE_CONNECT_FAILED, format!("set write timeout: {e}")))?;
 
     Ok((ws, shutdown))
+}
+
+#[cfg(test)]
+mod shared_tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::Instant;
+
+    fn stopping_shared() -> Arc<Shared> {
+        Arc::new(Shared {
+            state: AtomicU8::new(STATE_STOPPING),
+            ws: Mutex::new(None),
+            shutdown: Mutex::new(None),
+            done: (Mutex::new(false), Condvar::new()),
+            terminal_received: AtomicBool::new(false),
+            end_signal_sent: AtomicBool::new(false),
+            handoff_expired: AtomicBool::new(false),
+            handoff_waiting: AtomicBool::new(false),
+            reader_tid: Mutex::new(None),
+            stop_timeout: Mutex::new(DEFAULT_STOP_TIMEOUT),
+            finish_once: Once::new(),
+            voice_id: Mutex::new(String::new()),
+        })
+    }
+
+    fn wait_until_reader_is_parked(shared: &Shared) {
+        // Sleep rather than spin: this helper exists to reproduce CPU-starved
+        // CI, where a busy-waiting probe would compete with the very reader
+        // it is waiting for.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !shared.handoff_waiting.load(Ordering::SeqCst) {
+            assert!(Instant::now() < deadline, "reader never reached the handoff wait");
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    fn spawn_handoff_waiter(shared: &Arc<Shared>) -> (thread::JoinHandle<()>, mpsc::Receiver<bool>) {
+        let reader = Arc::clone(shared);
+        let (result_tx, result_rx) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            result_tx
+                .send(reader.wait_for_end_signal_if_stopping())
+                .unwrap();
+        });
+        (handle, result_rx)
+    }
+
+    #[test]
+    fn reader_waits_for_stop_to_send_end_signal() {
+        let shared = stopping_shared();
+        let (handle, result_rx) = spawn_handoff_waiter(&shared);
+        wait_until_reader_is_parked(&shared);
+
+        // handoff_waiting is published while done.0 is held, so this update
+        // cannot run until Condvar::wait has atomically released that mutex.
+        shared.mark_end_signal_sent();
+        assert!(
+            result_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            "reader should resume after the end signal is written"
+        );
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn finish_wakes_reader_waiting_for_end_signal() {
+        let shared = stopping_shared();
+        let (handle, result_rx) = spawn_handoff_waiter(&shared);
+        wait_until_reader_is_parked(&shared);
+
+        // This exercises the send-failure / Drop terminal path that used to
+        // publish STATE_STOPPED without holding done.0 and could lose wakeups.
+        shared.finish();
+        assert!(
+            !result_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            "reader must exit when the session becomes terminal before end"
+        );
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn reader_exits_when_session_stops_before_end_signal() {
+        let shared = stopping_shared();
+        shared.finish();
+        assert!(!shared.wait_for_end_signal_if_stopping());
+    }
+
+    #[test]
+    fn reader_resumes_polling_when_the_handoff_expires() {
+        // stop() can die between the RUNNING -> STOPPING transition and the
+        // end frame (a poisoned ws mutex panics the writer), leaving nobody
+        // to publish either flag. The reader must then fall back to the
+        // pre-handoff behaviour instead of parking forever, otherwise the
+        // session leaks a thread that no longer reads the socket.
+        let shared = stopping_shared();
+        let reader = Arc::clone(&shared);
+        let (result_tx, result_rx) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_millis(50);
+            result_tx
+                .send(reader.wait_for_end_signal_until(deadline))
+                .unwrap();
+        });
+
+        assert!(
+            result_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("reader parked past the handoff deadline"),
+            "reader should resume polling while the session is still stopping"
+        );
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn expired_handoff_does_not_stall_every_later_read() {
+        // Expiry must be sticky. Re-arming the deadline each round would turn
+        // an abandoned stop() into "one socket read per handoff timeout",
+        // which still leaves the connection unattended for pings, close
+        // frames and any final the server does send.
+        let shared = stopping_shared();
+        assert!(shared.wait_for_end_signal_until(Instant::now() + Duration::from_millis(50)));
+
+        // Still STOPPING with no end frame, yet the next round must not wait.
+        let start = Instant::now();
+        assert!(shared.wait_for_end_signal_until(Instant::now() + Duration::from_secs(60)));
+        assert!(
+            start.elapsed() < Duration::from_millis(500),
+            "expired handoff must not re-arm its deadline (waited {:?})",
+            start.elapsed()
+        );
+    }
 }

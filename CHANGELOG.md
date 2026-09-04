@@ -14,9 +14,13 @@
 
 ### 修复
 
-- 并发生命周期测试去抖：`stop_waits_for_slow_terminal_callback_beyond_timeout`
-  等测试在 CPU 饥饿环境（GitHub ubuntu runner）偶发 exit 101。同步等待预算统一
-  放宽到 10s，`stop_timeout` 1s→2s；1-CPU 容器内从约 50% 失败率降至 3/3 通过。
+- 修复实时识别 `stop()` 与 reader 轮询对同一 WebSocket mutex 的竞争：
+  `stop()` 进入 stopping 后，reader 会在下一次 polling read 返回时让出 mutex，
+  等 end 信号写出后再恢复读取。避免 reader 反复抢锁而延迟 end/final，导致
+  终端回调丢失并使生命周期测试在 GitHub Ubuntu runner 偶发 exit 101。
+  让锁期间若 `stop()` 异常中断，reader 会在兜底超时后自行恢复轮询，不会挂死。
+- 并发生命周期测试的等待预算保持放宽（`stop_timeout` 1s→2s、同步等待 10s），
+  与上述修复叠加，在 CPU 饥饿环境下留出足够余量。
 
 ## [1.0.0] - 2026-09-02
 

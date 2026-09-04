@@ -599,14 +599,19 @@ fn external_stop_waits_for_terminal_callback() {
         release: Arc::clone(&release),
     });
 
-    let server = MockWsServer::start(|mut ws| {
+    let server_got_end = Arc::new(AtomicBool::new(false));
+    let server_sent_final = Arc::new(AtomicBool::new(false));
+    let got_end = Arc::clone(&server_got_end);
+    let sent_final = Arc::clone(&server_sent_final);
+    let server = MockWsServer::start(move |mut ws| {
         loop {
             match ws.read() {
                 Ok(Message::Text(t)) if t == r#"{"type":"end"}"# => {
-                    ws.send(Message::Text(
+                    got_end.store(true, Ordering::SeqCst);
+                    let sent = ws.send(Message::Text(
                         r#"{"code":0,"message":"ok","voice_id":"v1","final":1,"result":{"slice_type":2}}"#.into(),
-                    ))
-                    .unwrap();
+                    ));
+                    sent_final.store(sent.is_ok(), Ordering::SeqCst);
                     return;
                 }
                 Ok(_) => {}
@@ -623,8 +628,16 @@ fn external_stop_waits_for_terminal_callback() {
     let r2 = Arc::clone(&r);
     let stop_handle = std::thread::spawn(move || r2.stop());
 
-    // Wait until the terminal callback is running.
-    assert!(wait_until(Duration::from_secs(10), || entered.load(Ordering::SeqCst)));
+    // Preserve each lifecycle boundary in a failure message: end must reach
+    // the server, the server must write final, and the reader must enter the
+    // terminal callback before Stop can return.
+    assert!(
+        wait_until(Duration::from_secs(10), || entered.load(Ordering::SeqCst)),
+        "terminal callback did not start: server_got_end={}, server_sent_final={}, stop_finished={}",
+        server_got_end.load(Ordering::SeqCst),
+        server_sent_final.load(Ordering::SeqCst),
+        stop_handle.is_finished(),
+    );
     std::thread::sleep(Duration::from_millis(100));
     // stop must not return while the terminal callback is still running.
     assert!(!stop_handle.is_finished(), "stop returned before terminal callback finished");
@@ -712,5 +725,55 @@ fn concurrent_writes_and_stop_do_not_deadlock() {
     }
     r.stop().expect("stop");
     assert!(sent.load(Ordering::SeqCst) > 0);
+    server.join();
+}
+
+#[test]
+fn stop_completes_promptly_while_reader_is_polling() {
+    // End-to-end guard for the end-signal handoff: the reader parks itself
+    // while stop() takes the socket, so a bug there would show up as stop()
+    // falling back to a timeout (no final, no complete) instead of being
+    // woken by the server's response.
+    let listener = Arc::new(RecordingListener::new());
+    let l = Arc::clone(&listener);
+    let server = MockWsServer::start(move |mut ws| {
+        loop {
+            match ws.read() {
+                Ok(Message::Text(t)) if t == r#"{"type":"end"}"# => {
+                    ws.send(Message::Text(
+                        r#"{"code":0,"message":"ok","voice_id":"v1","final":1,"result":{"slice_type":2}}"#.into(),
+                    ))
+                    .unwrap();
+                    return;
+                }
+                Ok(_) => {}
+                Err(_) => return,
+            }
+        }
+    });
+
+    let r = recognizer(listener, &server);
+    r.start().expect("start");
+    // Let the reader settle into its polling loop (READ_POLL_INTERVAL is
+    // 100ms) so stop() has to contend for the socket.
+    std::thread::sleep(Duration::from_millis(350));
+
+    let started = Instant::now();
+    r.stop().expect("stop");
+    let elapsed = started.elapsed();
+
+    assert_eq!(
+        RecordingListener::count(&l.complete_count),
+        1,
+        "stop must be completed by the server's final, not by its timeout"
+    );
+    // Loose bound on purpose: the precise assertion above already rules out
+    // the force-close path (a timed-out stop never sees a final). This one
+    // only guards against stop() stalling on the handoff's liveness backstop,
+    // which is an order of magnitude longer.
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "stop took {elapsed:?}, expected it to be woken by the final"
+    );
     server.join();
 }

@@ -1,5 +1,6 @@
 # TRTC-ASR Rust SDK
 
+> [English](./README.en.md) | 中文
 基于 TRTC 鉴权体系的语音识别（ASR）Rust SDK，支持实时语音识别（WebSocket）、一句话识别（HTTP）和录音文件识别（异步 HTTP）三种模式。
 
 本 SDK 面向**新版 v3 协议**：只需 `SDKAppID` + `SecretKey`（无需腾讯云 AppID），`auth`/`params` 分块、全 snake_case、扁平响应 + 数字错误码。v3 客户端位于 `trtc_asr_sdk::asr::v3` 模块。
@@ -242,7 +243,8 @@ fn main() {
     let credential = new_credential(1400000000, "your-sdk-secret-key");
     // credential.set_site(SITE_INTL);  // 国际站；不调用则走国内站
 
-    let mut recognizer = SpeechRecognizer::new(credential, "16k_zh_en", Arc::new(MyListener));
+    // start/write/stop 取 &self，无需 mut（params 在 RefCell 中）。
+    let recognizer = SpeechRecognizer::new(credential, "16k_zh_en", Arc::new(MyListener));
 
     // start() 同步等待服务端 ack；鉴权/参数错误在这里返回。
     recognizer.start().expect("start failed");

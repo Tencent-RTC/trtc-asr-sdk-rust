@@ -226,10 +226,7 @@ impl SentenceRecognizer {
     }
 
     /// Sends a sentence recognition request and returns the result.
-    pub fn recognize(
-        &self,
-        req: &SentenceRecognitionRequest,
-    ) -> Result<SentenceRecognitionResult> {
+    pub fn recognize(&self, req: &SentenceRecognitionRequest) -> Result<SentenceRecognitionResult> {
         validate_request(req)?;
 
         let request_id = Uuid::new_v4().to_string();
@@ -243,7 +240,10 @@ impl SentenceRecognizer {
                 86400,
             )
             .map_err(|e| {
-                AsrError::new(ERR_CODE_AUTH_FAILED, format!("generate user sig failed: {e}"))
+                AsrError::new(
+                    ERR_CODE_AUTH_FAILED,
+                    format!("generate user sig failed: {e}"),
+                )
             })?
         } else {
             self.credential.user_sig.clone()
@@ -284,7 +284,10 @@ impl SentenceRecognizer {
 
         // Check for API-level errors first.
         let api: SentenceApiResponse = serde_json::from_str(&resp_body).map_err(|e| {
-            AsrError::new(ERR_CODE_READ_FAILED, format!("unmarshal response failed: {e}"))
+            AsrError::new(
+                ERR_CODE_READ_FAILED,
+                format!("unmarshal response failed: {e}"),
+            )
         })?;
         let response = api
             .response
@@ -392,7 +395,10 @@ pub(crate) fn read_http_response(
         Ok(resp) => {
             let status = resp.status();
             let body = resp.into_string().map_err(|e| {
-                AsrError::new(ERR_CODE_READ_FAILED, format!("read response body failed: {e}"))
+                AsrError::new(
+                    ERR_CODE_READ_FAILED,
+                    format!("read response body failed: {e}"),
+                )
             })?;
             Ok((status, body))
         }

@@ -8,9 +8,7 @@ use common::{MockHttpResponse, MockHttpServer};
 use trtc_asr_sdk::asr::{
     SentenceRecognitionRequest, SentenceRecognizer, SOURCE_TYPE_DATA, SOURCE_TYPE_URL,
 };
-use trtc_asr_sdk::common::errors::{
-    ERR_CODE_INVALID_PARAM, ERR_CODE_SERVER_ERROR,
-};
+use trtc_asr_sdk::common::errors::{ERR_CODE_INVALID_PARAM, ERR_CODE_SERVER_ERROR};
 use trtc_asr_sdk::common::Credential;
 
 fn test_credential() -> Credential {
@@ -21,7 +19,9 @@ fn test_credential() -> Credential {
 fn recognize_rejects_invalid_requests() {
     let r = SentenceRecognizer::new(test_credential());
 
-    let err = r.recognize(&SentenceRecognitionRequest::default()).unwrap_err();
+    let err = r
+        .recognize(&SentenceRecognitionRequest::default())
+        .unwrap_err();
     assert_eq!(err.code, ERR_CODE_INVALID_PARAM);
     assert!(err.message.contains("EngServiceType is required"));
 
@@ -125,7 +125,9 @@ fn recognize_url_success() {
         let body: serde_json::Value = serde_json::from_str(&req.body).unwrap();
         assert_eq!(body["SourceType"], SOURCE_TYPE_URL);
         assert_eq!(body["Url"], "https://example.com/test.wav");
-        MockHttpResponse::json(r#"{"Response":{"Result":"hello","AudioDuration":1000,"RequestId":"req-2"}}"#)
+        MockHttpResponse::json(
+            r#"{"Response":{"Result":"hello","AudioDuration":1000,"RequestId":"req-2"}}"#,
+        )
     });
 
     let mut r = SentenceRecognizer::new(test_credential());
@@ -148,7 +150,9 @@ fn recognize_server_error() {
     let mut r = SentenceRecognizer::new(test_credential());
     r.set_endpoint(&server.url);
 
-    let err = r.recognize_data(b"fake-audio", "pcm", "16k_zh_en").unwrap_err();
+    let err = r
+        .recognize_data(b"fake-audio", "pcm", "16k_zh_en")
+        .unwrap_err();
     assert_eq!(err.code, ERR_CODE_SERVER_ERROR);
     assert!(err.message.contains("4002"), "{}", err.message);
     assert!(err.message.contains("req-err"), "{}", err.message);
@@ -164,7 +168,9 @@ fn recognize_http_error() {
     let mut r = SentenceRecognizer::new(test_credential());
     r.set_endpoint(&server.url);
 
-    let err = r.recognize_data(b"fake-audio", "pcm", "16k_zh_en").unwrap_err();
+    let err = r
+        .recognize_data(b"fake-audio", "pcm", "16k_zh_en")
+        .unwrap_err();
     assert!(err.message.contains("500"), "{}", err.message);
 }
 
@@ -209,7 +215,10 @@ fn preset_usersig_is_sent_verbatim() {
     r.recognize_data(b"fake-audio", "pcm", "16k_zh").unwrap();
     let reqs = server.requests();
     assert_eq!(reqs.len(), 1);
-    assert_eq!(reqs[0].header("X-TRTC-UserSig"), Some("preset-user-sig-value"));
+    assert_eq!(
+        reqs[0].header("X-TRTC-UserSig"),
+        Some("preset-user-sig-value")
+    );
 }
 
 #[test]

@@ -16,7 +16,7 @@ pub use sdkinfo::{
     sdk_platform, sdk_report_params, sdk_report_query, SDK_LANGUAGE, SDK_TYPE, SDK_VERSION,
 };
 pub use signature::{
-    SpeakerRole, SignatureParams, SPEAKER_DIARIZATION_CLUSTER, SPEAKER_DIARIZATION_OFF,
+    SignatureParams, SpeakerRole, SPEAKER_DIARIZATION_CLUSTER, SPEAKER_DIARIZATION_OFF,
     SPEAKER_DIARIZATION_VOICEPRINT,
 };
 pub use usersig::{gen_user_sig, DEFAULT_EXPIRE};

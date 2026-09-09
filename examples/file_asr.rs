@@ -20,8 +20,14 @@ fn main() {
     }
 
     let credential = Credential::new(
-        env::var("TRTC_ASR_APP_ID").expect("TRTC_ASR_APP_ID").parse().expect("TRTC_ASR_APP_ID must be an integer"),
-        env::var("TRTC_ASR_SDK_APP_ID").expect("TRTC_ASR_SDK_APP_ID").parse().expect("TRTC_ASR_SDK_APP_ID must be an integer"),
+        env::var("TRTC_ASR_APP_ID")
+            .expect("TRTC_ASR_APP_ID")
+            .parse()
+            .expect("TRTC_ASR_APP_ID must be an integer"),
+        env::var("TRTC_ASR_SDK_APP_ID")
+            .expect("TRTC_ASR_SDK_APP_ID")
+            .parse()
+            .expect("TRTC_ASR_SDK_APP_ID must be an integer"),
         env::var("TRTC_ASR_SECRET_KEY").expect("TRTC_ASR_SECRET_KEY"),
     );
 

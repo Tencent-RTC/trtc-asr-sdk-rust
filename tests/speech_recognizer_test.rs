@@ -67,9 +67,7 @@ fn start_twice_returns_already_started() {
 #[test]
 fn start_rejects_invalid_options_and_stays_reusable() {
     let listener = Arc::new(RecordingListener::new());
-    let server = MockWsServer::start(|mut ws| {
-        while ws.read().is_ok() {}
-    });
+    let server = MockWsServer::start(|mut ws| while ws.read().is_ok() {});
     let mut r = recognizer(listener, &server);
 
     r.set_speaker_diarization(2); // unsupported
@@ -218,21 +216,19 @@ fn write_and_end_signal_reach_server() {
     let got_audio = Arc::new(AtomicBool::new(false));
     let got_end = Arc::new(AtomicBool::new(false));
     let (a, e) = (Arc::clone(&got_audio), Arc::clone(&got_end));
-    let server = MockWsServer::start(move |mut ws| {
-        loop {
-            match ws.read() {
-                Ok(Message::Binary(b)) if *b == *b"\x01\x02\x03" => a.store(true, Ordering::SeqCst),
-                Ok(Message::Text(t)) if t == r#"{"type":"end"}"# => {
-                    e.store(true, Ordering::SeqCst);
-                    ws.send(Message::Text(
+    let server = MockWsServer::start(move |mut ws| loop {
+        match ws.read() {
+            Ok(Message::Binary(b)) if *b == *b"\x01\x02\x03" => a.store(true, Ordering::SeqCst),
+            Ok(Message::Text(t)) if t == r#"{"type":"end"}"# => {
+                e.store(true, Ordering::SeqCst);
+                ws.send(Message::Text(
                         r#"{"code":0,"message":"ok","voice_id":"v1","final":1,"result":{"slice_type":2}}"#.into(),
                     ))
                     .unwrap();
-                    return;
-                }
-                Ok(_) => {}
-                Err(_) => return,
+                return;
             }
+            Ok(_) => {}
+            Err(_) => return,
         }
     });
 
@@ -241,8 +237,14 @@ fn write_and_end_signal_reach_server() {
     r.write(b"\x01\x02\x03").expect("write");
     r.stop().expect("stop");
 
-    assert!(got_audio.load(Ordering::SeqCst), "server should receive the audio frame");
-    assert!(got_end.load(Ordering::SeqCst), "server should receive the end signal");
+    assert!(
+        got_audio.load(Ordering::SeqCst),
+        "server should receive the audio frame"
+    );
+    assert!(
+        got_end.load(Ordering::SeqCst),
+        "server should receive the end signal"
+    );
     server.join();
 }
 
@@ -412,13 +414,24 @@ fn stop_from_non_terminal_callback_returns_promptly() {
     *l.recognizer.lock().unwrap() = Some(Arc::clone(&r));
     r.start().expect("start");
 
-    assert!(wait_until(Duration::from_secs(10), || {
-        l.stop_result.lock().unwrap().is_some()
-    }), "stop() inside on_recognition_result_change did not return promptly (self-deadlock?)");
+    assert!(
+        wait_until(Duration::from_secs(10), || {
+            l.stop_result.lock().unwrap().is_some()
+        }),
+        "stop() inside on_recognition_result_change did not return promptly (self-deadlock?)"
+    );
 
     let dur = l.stop_duration.lock().unwrap().unwrap();
-    assert!(dur < Duration::from_secs(5), "stop took {dur:?}, want prompt return");
-    l.stop_result.lock().unwrap().take().unwrap().expect("stop result ok");
+    assert!(
+        dur < Duration::from_secs(5),
+        "stop took {dur:?}, want prompt return"
+    );
+    l.stop_result
+        .lock()
+        .unwrap()
+        .take()
+        .unwrap()
+        .expect("stop result ok");
 
     // The watchdog completes the session after the server replies final.
     assert!(wait_until(Duration::from_secs(10), || {
@@ -483,10 +496,7 @@ fn stop_waits_for_slow_terminal_callback_beyond_timeout() {
         release: Arc<AtomicBool>,
     }
     impl SpeechRecognitionListener for SlowCompleteListener {
-        fn on_recognition_complete(
-            &self,
-            _r: &trtc_asr_sdk::asr::SpeechRecognitionResponse,
-        ) {
+        fn on_recognition_complete(&self, _r: &trtc_asr_sdk::asr::SpeechRecognitionResponse) {
             self.entered.store(true, Ordering::SeqCst);
             while !self.release.load(Ordering::SeqCst) {
                 std::thread::sleep(Duration::from_millis(5));
@@ -500,19 +510,17 @@ fn stop_waits_for_slow_terminal_callback_beyond_timeout() {
         entered: Arc::clone(&entered),
         release: Arc::clone(&release),
     });
-    let server = MockWsServer::start(|mut ws| {
-        loop {
-            match ws.read() {
-                Ok(Message::Text(t)) if t == r#"{"type":"end"}"# => {
-                    ws.send(Message::Text(
+    let server = MockWsServer::start(|mut ws| loop {
+        match ws.read() {
+            Ok(Message::Text(t)) if t == r#"{"type":"end"}"# => {
+                ws.send(Message::Text(
                         r#"{"code":0,"message":"ok","voice_id":"v1","final":1,"result":{"slice_type":2}}"#.into(),
                     ))
                     .unwrap();
-                    return;
-                }
-                Ok(_) => {}
-                Err(_) => return,
+                return;
             }
+            Ok(_) => {}
+            Err(_) => return,
         }
     });
 
@@ -554,7 +562,9 @@ fn stop_times_out_and_force_closes_when_server_never_finishes() {
         // the client force-closes.
         loop {
             match ws.read() {
-                Ok(Message::Text(t)) if t == r#"{"type":"end"}"# => ge.store(true, Ordering::SeqCst),
+                Ok(Message::Text(t)) if t == r#"{"type":"end"}"# => {
+                    ge.store(true, Ordering::SeqCst)
+                }
                 Ok(_) => {}
                 Err(_) => return,
             }
@@ -568,7 +578,10 @@ fn stop_times_out_and_force_closes_when_server_never_finishes() {
     let start = Instant::now();
     r.stop().expect("stop returns even without a final frame");
     let elapsed = start.elapsed();
-    assert!(server_got_end.load(Ordering::SeqCst), "server should have read the end signal");
+    assert!(
+        server_got_end.load(Ordering::SeqCst),
+        "server should have read the end signal"
+    );
     assert!(
         elapsed >= Duration::from_secs(1) && elapsed < Duration::from_secs(5),
         "stop should wait ~stop_timeout, took {elapsed:?}"
@@ -603,20 +616,18 @@ fn external_stop_waits_for_terminal_callback() {
     let server_sent_final = Arc::new(AtomicBool::new(false));
     let got_end = Arc::clone(&server_got_end);
     let sent_final = Arc::clone(&server_sent_final);
-    let server = MockWsServer::start(move |mut ws| {
-        loop {
-            match ws.read() {
-                Ok(Message::Text(t)) if t == r#"{"type":"end"}"# => {
-                    got_end.store(true, Ordering::SeqCst);
-                    let sent = ws.send(Message::Text(
+    let server = MockWsServer::start(move |mut ws| loop {
+        match ws.read() {
+            Ok(Message::Text(t)) if t == r#"{"type":"end"}"# => {
+                got_end.store(true, Ordering::SeqCst);
+                let sent = ws.send(Message::Text(
                         r#"{"code":0,"message":"ok","voice_id":"v1","final":1,"result":{"slice_type":2}}"#.into(),
                     ));
-                    sent_final.store(sent.is_ok(), Ordering::SeqCst);
-                    return;
-                }
-                Ok(_) => {}
-                Err(_) => return,
+                sent_final.store(sent.is_ok(), Ordering::SeqCst);
+                return;
             }
+            Ok(_) => {}
+            Err(_) => return,
         }
     });
 
@@ -640,7 +651,10 @@ fn external_stop_waits_for_terminal_callback() {
     );
     std::thread::sleep(Duration::from_millis(100));
     // stop must not return while the terminal callback is still running.
-    assert!(!stop_handle.is_finished(), "stop returned before terminal callback finished");
+    assert!(
+        !stop_handle.is_finished(),
+        "stop returned before terminal callback finished"
+    );
 
     release.store(true, Ordering::SeqCst);
     stop_handle
@@ -672,9 +686,7 @@ fn timeout_clamps() {
 #[test]
 fn reconnect_requires_new_instance() {
     let listener = Arc::new(RecordingListener::new());
-    let server = MockWsServer::start(|mut ws| {
-        while ws.read().is_ok() {}
-    });
+    let server = MockWsServer::start(|mut ws| while ws.read().is_ok() {});
     let r = recognizer(listener, &server);
     r.start().expect("start");
     r.stop().expect("stop");
@@ -688,22 +700,20 @@ fn concurrent_writes_and_stop_do_not_deadlock() {
     let listener = Arc::new(RecordingListener::new());
     let sent = Arc::new(AtomicUsize::new(0));
     let s = Arc::clone(&sent);
-    let server = MockWsServer::start(move |mut ws| {
-        loop {
-            match ws.read() {
-                Ok(Message::Binary(_)) => {
-                    s.fetch_add(1, Ordering::SeqCst);
-                }
-                Ok(Message::Text(t)) if t == r#"{"type":"end"}"# => {
-                    ws.send(Message::Text(
+    let server = MockWsServer::start(move |mut ws| loop {
+        match ws.read() {
+            Ok(Message::Binary(_)) => {
+                s.fetch_add(1, Ordering::SeqCst);
+            }
+            Ok(Message::Text(t)) if t == r#"{"type":"end"}"# => {
+                ws.send(Message::Text(
                         r#"{"code":0,"message":"ok","voice_id":"v1","final":1,"result":{"slice_type":2}}"#.into(),
                     ))
                     .unwrap();
-                    return;
-                }
-                Ok(_) => {}
-                Err(_) => return,
+                return;
             }
+            Ok(_) => {}
+            Err(_) => return,
         }
     });
 
@@ -736,19 +746,17 @@ fn stop_completes_promptly_while_reader_is_polling() {
     // woken by the server's response.
     let listener = Arc::new(RecordingListener::new());
     let l = Arc::clone(&listener);
-    let server = MockWsServer::start(move |mut ws| {
-        loop {
-            match ws.read() {
-                Ok(Message::Text(t)) if t == r#"{"type":"end"}"# => {
-                    ws.send(Message::Text(
+    let server = MockWsServer::start(move |mut ws| loop {
+        match ws.read() {
+            Ok(Message::Text(t)) if t == r#"{"type":"end"}"# => {
+                ws.send(Message::Text(
                         r#"{"code":0,"message":"ok","voice_id":"v1","final":1,"result":{"slice_type":2}}"#.into(),
                     ))
                     .unwrap();
-                    return;
-                }
-                Ok(_) => {}
-                Err(_) => return,
+                return;
             }
+            Ok(_) => {}
+            Err(_) => return,
         }
     });
 

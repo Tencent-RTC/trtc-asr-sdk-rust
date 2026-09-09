@@ -48,7 +48,9 @@ pub fn validate_speaker_diarization(
 
     for (i, role) in roles.iter().enumerate() {
         if role.role_name.is_empty() {
-            return Err(invalid_param(format!("SpeakerRoles[{i}].RoleName is empty")));
+            return Err(invalid_param(format!(
+                "SpeakerRoles[{i}].RoleName is empty"
+            )));
         }
         validate_enrollment_url(i, &role.audio_url)?;
     }
@@ -70,7 +72,9 @@ pub fn validate_speaker_diarization(
 /// policies belong to the service-side allow list.
 fn validate_enrollment_url(index: usize, raw_url: &str) -> Result<()> {
     if raw_url.trim().is_empty() {
-        return Err(invalid_param(format!("SpeakerRoles[{index}].AudioUrl is empty")));
+        return Err(invalid_param(format!(
+            "SpeakerRoles[{index}].AudioUrl is empty"
+        )));
     }
 
     // Split scheme://authority explicitly: WHATWG URL parsing (the url crate)
@@ -90,10 +94,7 @@ fn validate_enrollment_url(index: usize, raw_url: &str) -> Result<()> {
             "SpeakerRoles[{index}].AudioUrl must use http or https, got {scheme:?}"
         )));
     }
-    let authority = rest
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or("");
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
     if authority.is_empty() {
         return Err(invalid_param(format!(
             "SpeakerRoles[{index}].AudioUrl has no host"
@@ -101,7 +102,9 @@ fn validate_enrollment_url(index: usize, raw_url: &str) -> Result<()> {
     }
     // General syntax sanity check on top of the manual splits.
     Url::parse(raw_url).map_err(|e| {
-        invalid_param(format!("SpeakerRoles[{index}].AudioUrl is not a valid URL: {e}"))
+        invalid_param(format!(
+            "SpeakerRoles[{index}].AudioUrl is not a valid URL: {e}"
+        ))
     })?;
     Ok(())
 }

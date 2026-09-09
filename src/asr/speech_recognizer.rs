@@ -51,12 +51,13 @@ use super::types::SpeechRecognitionResponse;
 /// Production WebSocket endpoint for the TRTC-ASR service.
 pub const ENDPOINT: &str = "wss://asr.cloud-rtc.com";
 
-// Recognizer states.
-const STATE_IDLE: u8 = 0;
-const STATE_STARTING: u8 = 1;
-const STATE_RUNNING: u8 = 2;
-const STATE_STOPPING: u8 = 3;
-const STATE_STOPPED: u8 = 4;
+// Recognizer states. pub(crate) so the v3 module can reuse the same
+// lifecycle machinery without duplicating it.
+pub(crate) const STATE_IDLE: u8 = 0;
+pub(crate) const STATE_STARTING: u8 = 1;
+pub(crate) const STATE_RUNNING: u8 = 2;
+pub(crate) const STATE_STOPPING: u8 = 3;
+pub(crate) const STATE_STOPPED: u8 = 4;
 
 // Write-timeout bounds. A single `write` holds the writer for at most
 // `write_timeout` (enforced via the socket write timeout), so `stop`'s
@@ -82,9 +83,18 @@ const MAX_STOP_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Poll interval for the reader thread. The sync socket uses a short read
 /// timeout so `close` can always interrupt a blocked read promptly.
-const READ_POLL_INTERVAL: Duration = Duration::from_millis(100);
+pub(crate) const READ_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
+pub(crate) fn clamp_timeout_pub(
+    v: Duration,
+    min: Duration,
+    max: Duration,
+    default: Duration,
+) -> Duration {
+    clamp_timeout(v, min, max, default)
+}
 
 /// Callback interface for speech recognition events. All methods have
 /// default no-op implementations so tests and simple callers can implement
@@ -106,7 +116,7 @@ pub trait SpeechRecognitionListener: Send + Sync {
 
 /// Duplex byte stream used by the WebSocket: plain TCP for `ws://` and
 /// TLS-wrapped TCP for `wss://`.
-enum Stream {
+pub(crate) enum Stream {
     Plain(TcpStream),
     Tls(rustls::StreamOwned<rustls::ClientConnection, TcpStream>),
 }
@@ -136,19 +146,19 @@ impl Write for Stream {
 }
 
 /// Runtime state shared between the recognizer (API threads) and the reader
-/// thread.
-struct Shared {
-    state: AtomicU8,
+/// thread. pub(crate) so the v3 module reuses the identical lifecycle.
+pub(crate) struct Shared {
+    pub(crate) state: AtomicU8,
     /// The WebSocket connection. Reads hold the lock for at most
     /// [`READ_POLL_INTERVAL`] (socket read timeout), so writers and `close`
     /// never block long.
-    ws: Mutex<Option<WebSocket<Stream>>>,
+    pub(crate) ws: Mutex<Option<WebSocket<Stream>>>,
     /// Force-close handle: a cloned fd of the underlying socket. Shutting it
     /// down unblocks any in-flight read/write with an I/O error.
-    shutdown: Mutex<Option<TcpStream>>,
+    pub(crate) shutdown: Mutex<Option<TcpStream>>,
     /// Signalled (set + notify_all) when the reader thread has fully exited,
     /// including delivery of terminal callbacks.
-    done: (Mutex<bool>, Condvar),
+    pub(crate) done: (Mutex<bool>, Condvar),
     /// Set once a terminal response (Final=1 or code!=0) has been received.
     /// External `stop` callers then wait for `done` without a timeout so the
     /// terminal callbacks can finish.
@@ -169,7 +179,7 @@ struct Shared {
     handoff_waiting: AtomicBool,
     /// Thread ID of the reader thread, used to detect re-entrant `stop` calls
     /// from listener callbacks (cleaner than Go's stack walking).
-    reader_tid: Mutex<Option<thread::ThreadId>>,
+    pub(crate) reader_tid: Mutex<Option<thread::ThreadId>>,
     stop_timeout: Mutex<Duration>,
     finish_once: Once,
     /// The resolved voice ID for the running session (generated when the user
@@ -178,10 +188,10 @@ struct Shared {
 }
 
 impl Shared {
-    fn set_voice_id(&self, id: &str) {
+    pub(crate) fn set_voice_id(&self, id: &str) {
         *self.voice_id.lock().unwrap() = id.to_string();
     }
-    fn voice_id(&self) -> String {
+    pub(crate) fn voice_id(&self) -> String {
         self.voice_id.lock().unwrap().clone()
     }
 }
@@ -303,8 +313,42 @@ impl Shared {
         self.state() != STATE_STOPPED
     }
 
-    fn state(&self) -> u8 {
+    pub(crate) fn state(&self) -> u8 {
         self.state.load(Ordering::SeqCst)
+    }
+
+    /// IDLE → STARTING CAS for start(); shared with the v3 module.
+    pub(crate) fn compare_exchange_starting(&self) -> std::result::Result<(), u8> {
+        let _guard = self.done.0.lock().unwrap();
+        self.state
+            .compare_exchange(
+                STATE_IDLE,
+                STATE_STARTING,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .map(|_| ())
+            .map_err(|current| current)
+    }
+
+    pub(crate) fn finish_pub(&self) {
+        self.finish();
+    }
+
+    pub(crate) fn close_pub(&self) {
+        self.close();
+    }
+
+    pub(crate) fn mark_end_signal_sent_pub(&self) {
+        self.mark_end_signal_sent();
+    }
+
+    pub(crate) fn set_stop_timeout_pub(&self, timeout: Duration) {
+        *self.stop_timeout.lock().unwrap() = timeout;
+    }
+
+    pub(crate) fn wait_for_read_loop_or_close_pub(&self) {
+        self.wait_for_read_loop_or_close_impl();
     }
 }
 
@@ -344,6 +388,26 @@ pub struct SpeechRecognizer {
     stop_timeout: Duration,
 
     shared: Arc<Shared>,
+}
+
+/// Creates the runtime state shared between the API threads and the reader
+/// thread. pub(crate) so the v3 module constructs the identical machinery.
+pub(crate) fn new_shared() -> Arc<Shared> {
+    Arc::new(Shared {
+        state: AtomicU8::new(STATE_IDLE),
+        ws: Mutex::new(None),
+        shutdown: Mutex::new(None),
+        done: (Mutex::new(false), Condvar::new()),
+        terminal_received: AtomicBool::new(false),
+        end_signal_sent: AtomicBool::new(false),
+        handoff_expired: AtomicBool::new(false),
+        #[cfg(test)]
+        handoff_waiting: AtomicBool::new(false),
+        reader_tid: Mutex::new(None),
+        stop_timeout: Mutex::new(DEFAULT_STOP_TIMEOUT),
+        finish_once: Once::new(),
+        voice_id: Mutex::new(String::new()),
+    })
 }
 
 /// RAII backstop: dropping a still-running recognizer finishes the session
@@ -401,21 +465,7 @@ impl SpeechRecognizer {
             language: String::new(),
             write_timeout: DEFAULT_WRITE_TIMEOUT,
             stop_timeout: DEFAULT_STOP_TIMEOUT,
-            shared: Arc::new(Shared {
-                state: AtomicU8::new(STATE_IDLE),
-                ws: Mutex::new(None),
-                shutdown: Mutex::new(None),
-                done: (Mutex::new(false), Condvar::new()),
-                terminal_received: AtomicBool::new(false),
-                end_signal_sent: AtomicBool::new(false),
-                handoff_expired: AtomicBool::new(false),
-                #[cfg(test)]
-                handoff_waiting: AtomicBool::new(false),
-                reader_tid: Mutex::new(None),
-                stop_timeout: Mutex::new(DEFAULT_STOP_TIMEOUT),
-                finish_once: Once::new(),
-                voice_id: Mutex::new(String::new()),
-            }),
+            shared: new_shared(),
         }
     }
 
@@ -667,7 +717,10 @@ impl SpeechRecognizer {
     /// [`set_voice_format`](Self::set_voice_format) (default: PCM).
     pub fn write(&self, data: &[u8]) -> Result<()> {
         if self.shared.state() != STATE_RUNNING {
-            return Err(AsrError::new(ERR_CODE_NOT_STARTED, "recognizer not running"));
+            return Err(AsrError::new(
+                ERR_CODE_NOT_STARTED,
+                "recognizer not running",
+            ));
         }
 
         // Serialize all writes through the connection mutex. The socket write
@@ -689,7 +742,10 @@ impl SpeechRecognizer {
         // sent the end signal. Writing audio after end would violate the
         // protocol, so bail out instead.
         if self.shared.state() != STATE_RUNNING {
-            return Err(AsrError::new(ERR_CODE_NOT_STARTED, "recognizer not running"));
+            return Err(AsrError::new(
+                ERR_CODE_NOT_STARTED,
+                "recognizer not running",
+            ));
         }
 
         ws.send(Message::Binary(data.to_vec().into())).map_err(|e| {
@@ -726,7 +782,10 @@ impl SpeechRecognizer {
             )
         };
         if cas.is_err() {
-            return Err(AsrError::new(ERR_CODE_NOT_STARTED, "recognizer not running"));
+            return Err(AsrError::new(
+                ERR_CODE_NOT_STARTED,
+                "recognizer not running",
+            ));
         }
         self.shared.done.1.notify_all();
 
@@ -738,7 +797,10 @@ impl SpeechRecognizer {
                 None if self.shared.state() == STATE_STOPPED => (None, false),
                 None => (None, true),
                 Some(_) if self.shared.state() == STATE_STOPPED => (None, false),
-                Some(ws) => (Some(ws.send(Message::Text(r#"{"type":"end"}"#.into()))), false),
+                Some(ws) => (
+                    Some(ws.send(Message::Text(r#"{"type":"end"}"#.into()))),
+                    false,
+                ),
             }
         };
 
@@ -923,8 +985,9 @@ impl Shared {
 }
 
 /// The reader thread body. Delivers events from the server until the session
-/// ends, then marks the lifecycle done.
-fn read_loop(
+/// ends, then marks the lifecycle done. pub(crate) so the v3 module reuses
+/// the identical pump (the v3 downlink shape is identical to v2).
+pub(crate) fn read_loop(
     shared: Arc<Shared>,
     listener: Arc<dyn SpeechRecognitionListener>,
     voice_id: String,
@@ -963,12 +1026,16 @@ fn read_loop_inner(
     listener: &Arc<dyn SpeechRecognitionListener>,
     voice_id: &str,
 ) {
-    fire_callback(listener, &SpeechRecognitionResponse {
-        code: 0,
-        message: "success".to_string(),
-        voice_id: voice_id.to_string(),
-        ..Default::default()
-    }, &|l, r| l.on_recognition_start(r));
+    fire_callback(
+        listener,
+        &SpeechRecognitionResponse {
+            code: 0,
+            message: "success".to_string(),
+            voice_id: voice_id.to_string(),
+            ..Default::default()
+        },
+        &|l, r| l.on_recognition_start(r),
+    );
 
     loop {
         // Give ordinary audio writers a chance after a polling read. For a
@@ -1011,10 +1078,7 @@ fn read_loop_inner(
                 safe_on_fail(
                     listener,
                     None,
-                    &AsrError::new(
-                        ERR_CODE_READ_FAILED,
-                        format!("read message failed: {e}"),
-                    ),
+                    &AsrError::new(ERR_CODE_READ_FAILED, format!("read message failed: {e}")),
                 );
                 return;
             }
@@ -1123,10 +1187,7 @@ fn read_loop_inner(
     }
 }
 
-fn dispatch_event(
-    listener: &Arc<dyn SpeechRecognitionListener>,
-    resp: &SpeechRecognitionResponse,
-) {
+fn dispatch_event(listener: &Arc<dyn SpeechRecognitionListener>, resp: &SpeechRecognitionResponse) {
     if resp.final_flag == 1 && resp.result.slice_type != 2 {
         return;
     }
@@ -1163,10 +1224,7 @@ fn safe_on_fail(
 
 /// Delivers the on_recognition_complete callback with the same
 /// panic-shielding guarantee as [`safe_on_fail`].
-fn safe_complete(
-    listener: &Arc<dyn SpeechRecognitionListener>,
-    resp: &SpeechRecognitionResponse,
-) {
+fn safe_complete(listener: &Arc<dyn SpeechRecognitionListener>, resp: &SpeechRecognitionResponse) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
         listener.on_recognition_complete(resp);
     }));
@@ -1195,19 +1253,23 @@ fn clamp_timeout(v: Duration, min: Duration, max: Duration, default: Duration) -
 }
 
 /// Opens a WebSocket connection to `url`, returning the WebSocket plus a
-/// force-close handle for the underlying socket.
-fn connect_ws(
+/// force-close handle for the underlying socket. pub(crate) so the v3 module
+/// reuses the identical transport.
+pub(crate) fn connect_ws(
     url: &str,
     handshake_timeout: Duration,
     read_poll: Duration,
     write_timeout: Duration,
 ) -> Result<(WebSocket<Stream>, TcpStream)> {
     let uri = Url::parse(url).map_err(|e| {
-        AsrError::new(ERR_CODE_CONNECT_FAILED, format!("invalid endpoint url: {e}"))
+        AsrError::new(
+            ERR_CODE_CONNECT_FAILED,
+            format!("invalid endpoint url: {e}"),
+        )
     })?;
-    let host = uri.host_str().ok_or_else(|| {
-        AsrError::new(ERR_CODE_CONNECT_FAILED, "endpoint url has no host")
-    })?;
+    let host = uri
+        .host_str()
+        .ok_or_else(|| AsrError::new(ERR_CODE_CONNECT_FAILED, "endpoint url has no host"))?;
     let secure = match uri.scheme() {
         "wss" => true,
         "ws" => false,
@@ -1218,9 +1280,9 @@ fn connect_ws(
             ))
         }
     };
-    let port = uri.port_or_known_default().ok_or_else(|| {
-        AsrError::new(ERR_CODE_CONNECT_FAILED, "endpoint url has no port")
-    })?;
+    let port = uri
+        .port_or_known_default()
+        .ok_or_else(|| AsrError::new(ERR_CODE_CONNECT_FAILED, "endpoint url has no port"))?;
 
     let addr = (host, port)
         .to_socket_addrs()
@@ -1228,9 +1290,8 @@ fn connect_ws(
         .next()
         .ok_or_else(|| AsrError::new(ERR_CODE_CONNECT_FAILED, "dns resolve returned no address"))?;
 
-    let tcp = TcpStream::connect_timeout(&addr, handshake_timeout).map_err(|e| {
-        AsrError::new(ERR_CODE_CONNECT_FAILED, format!("tcp connect failed: {e}"))
-    })?;
+    let tcp = TcpStream::connect_timeout(&addr, handshake_timeout)
+        .map_err(|e| AsrError::new(ERR_CODE_CONNECT_FAILED, format!("tcp connect failed: {e}")))?;
     let _ = tcp.set_nodelay(true);
     tcp.set_read_timeout(Some(handshake_timeout))
         .map_err(|e| AsrError::new(ERR_CODE_CONNECT_FAILED, format!("set read timeout: {e}")))?;
@@ -1245,10 +1306,18 @@ fn connect_ws(
 
     let stream = if secure {
         let config = crate::common::tls::rustls_client_config();
-        let server_name = rustls::pki_types::ServerName::try_from(host.to_owned())
-            .map_err(|e| AsrError::new(ERR_CODE_CONNECT_FAILED, format!("invalid tls server name: {e}")))?;
+        let server_name =
+            rustls::pki_types::ServerName::try_from(host.to_owned()).map_err(|e| {
+                AsrError::new(
+                    ERR_CODE_CONNECT_FAILED,
+                    format!("invalid tls server name: {e}"),
+                )
+            })?;
         let conn = rustls::ClientConnection::new(config, server_name).map_err(|e| {
-            AsrError::new(ERR_CODE_CONNECT_FAILED, format!("tls connection init failed: {e}"))
+            AsrError::new(
+                ERR_CODE_CONNECT_FAILED,
+                format!("tls connection init failed: {e}"),
+            )
         })?;
         Stream::Tls(rustls::StreamOwned::new(conn, tcp))
     } else {
@@ -1256,7 +1325,10 @@ fn connect_ws(
     };
 
     let (ws, _response) = tungstenite::client::client(url, stream).map_err(|e| {
-        AsrError::new(ERR_CODE_CONNECT_FAILED, format!("websocket handshake failed: {e}"))
+        AsrError::new(
+            ERR_CODE_CONNECT_FAILED,
+            format!("websocket handshake failed: {e}"),
+        )
     })?;
 
     // After the handshake switch to the steady-state timeouts: a short read
@@ -1301,12 +1373,17 @@ mod shared_tests {
         // it is waiting for.
         let deadline = Instant::now() + Duration::from_secs(5);
         while !shared.handoff_waiting.load(Ordering::SeqCst) {
-            assert!(Instant::now() < deadline, "reader never reached the handoff wait");
+            assert!(
+                Instant::now() < deadline,
+                "reader never reached the handoff wait"
+            );
             thread::sleep(Duration::from_millis(1));
         }
     }
 
-    fn spawn_handoff_waiter(shared: &Arc<Shared>) -> (thread::JoinHandle<()>, mpsc::Receiver<bool>) {
+    fn spawn_handoff_waiter(
+        shared: &Arc<Shared>,
+    ) -> (thread::JoinHandle<()>, mpsc::Receiver<bool>) {
         let reader = Arc::clone(shared);
         let (result_tx, result_rx) = mpsc::channel();
         let handle = thread::spawn(move || {

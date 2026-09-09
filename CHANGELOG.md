@@ -7,6 +7,22 @@
 
 ## [未发布]
 
+### 新增
+
+- 新增 v3 协议客户端，位于独立模块 `trtc_asr_sdk::asr::v3`，与 v2/v1 客户端（`asr` 顶层导出）完全解耦，两者可独立选用、互不影响：
+  - `v3::SpeechRecognizer`：WebSocket `/asr/v3`，URL 仅携带 `voice_id`，鉴权与识别参数通过首帧 JSON（`{"type":"start","auth":{...},"params":{...}}`）下发；`start()` 同步等待服务端 ack，鉴权失败（4002）/参数非法（4001）等错误同步返回
+  - `v3::SentenceRecognizer`：`POST /v3/transcribe`，body 为 `{auth, params}` 分块，请求/响应均为 snake_case 扁平结构（无 `Response` 外壳）
+  - `v3::FileRecognizer`：`POST /v3/create_transcription` + `/v3/describe_transcription`，任务 ID 为 `transcription_id`（与 v1 `RecTaskId` 不通用）
+  - `v3::new_credential(sdk_app_id, secret_key)`：v3 不再需要腾讯云 AppID
+  - 服务端数字错误码（4xxx/5xxx）直接作为 `AsrError.code` 返回，与 SDK 本地错误码（10xx）区间不冲突；离线错误一律以响应 body 的 `code` 为准（鉴权失败也是 HTTP 200）
+  - `needvad`/`convert_num_mode` 显式传 0 会真正下发（v2 query 传参会吞掉 0 值）；说话人分离的 `speaker_roles` 元素序列化为 snake_case（`role_name`/`audio_url`），声纹 ID 列表为 `voiceprint_ids`
+  - v3 新增能力：`word_with_space`、`context`（识别上下文 text/terms/general）；录音文件支持 `audio_urls` 分布式录音
+  - 下行消息结构与 v2 完全一致，listener trait（`asr::SpeechRecognitionListener`）两版共用
+  - 使用前提：服务端已为对应 SDKAppID 开启 `EnableV3Route` 灰度
+  - 注：协议中服务端内部的 `business` 灰度字段不属于公开 API，SDK 不暴露、不发送
+- 新增 `examples/v3_realtime_asr.rs` / `v3_sentence_asr.rs` / `v3_file_asr.rs` 示例
+- README 改为只承载 v3 协议文档；v2 / v1 协议与客户端说明移至 `docs/v2_protocol.md`
+
 ### 变更
 
 - 仓库迁移至 `github.com/Tencent-RTC/trtc-asr-sdk-rust`，功能与 API 无任何变化。

@@ -316,7 +316,10 @@ impl FileRecognizer {
         let resp_body = self.do_request("/v1/CreateRecTask", &body)?;
 
         let resp: CreateRecTaskResponse = serde_json::from_str(&resp_body).map_err(|e| {
-            AsrError::new(ERR_CODE_READ_FAILED, format!("unmarshal response failed: {e}"))
+            AsrError::new(
+                ERR_CODE_READ_FAILED,
+                format!("unmarshal response failed: {e}"),
+            )
         })?;
         let response = resp
             .response
@@ -330,10 +333,7 @@ impl FileRecognizer {
                 ),
             ));
         }
-        let task_id = response
-            .data
-            .map(|d| d.rec_task_id)
-            .unwrap_or_default();
+        let task_id = response.data.map(|d| d.rec_task_id).unwrap_or_default();
         if task_id.is_empty() {
             return Err(AsrError::new(
                 ERR_CODE_SERVER_ERROR,
@@ -416,7 +416,10 @@ impl FileRecognizer {
         let resp_body = self.do_request("/v1/DescribeTaskStatus", &body)?;
 
         let resp: DescribeTaskStatusResponse = serde_json::from_str(&resp_body).map_err(|e| {
-            AsrError::new(ERR_CODE_READ_FAILED, format!("unmarshal response failed: {e}"))
+            AsrError::new(
+                ERR_CODE_READ_FAILED,
+                format!("unmarshal response failed: {e}"),
+            )
         })?;
         let response = resp
             .response
@@ -438,7 +441,11 @@ impl FileRecognizer {
     /// Polls for the result until the task completes or fails.
     /// Default poll interval is 1s, max wait is 10 minutes.
     pub fn wait_for_result(&self, rec_task_id: &str) -> Result<TaskStatus> {
-        self.wait_for_result_with_interval(rec_task_id, Duration::from_secs(1), Duration::from_secs(600))
+        self.wait_for_result_with_interval(
+            rec_task_id,
+            Duration::from_secs(1),
+            Duration::from_secs(600),
+        )
     }
 
     /// Polls for the result with a custom interval and timeout.
@@ -494,7 +501,10 @@ impl FileRecognizer {
                 86400,
             )
             .map_err(|e| {
-                AsrError::new(ERR_CODE_AUTH_FAILED, format!("generate user sig failed: {e}"))
+                AsrError::new(
+                    ERR_CODE_AUTH_FAILED,
+                    format!("generate user sig failed: {e}"),
+                )
             })?
         } else {
             self.credential.user_sig.clone()

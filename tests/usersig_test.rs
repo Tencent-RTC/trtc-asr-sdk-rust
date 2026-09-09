@@ -73,7 +73,11 @@ fn gen_user_sig_various_inputs() {
     for (app_id, key, user) in [
         (1400000001u64, "key1", "user1"),
         (1400000002, "key2", "user2"),
-        (1400000003, "key-with-special-chars!@#$%", "user-with-dashes"),
+        (
+            1400000003,
+            "key-with-special-chars!@#$%",
+            "user-with-dashes",
+        ),
     ] {
         let sig = gen_user_sig(app_id, key, user, 86400).expect("gen");
         let doc = decode_sig(&sig);

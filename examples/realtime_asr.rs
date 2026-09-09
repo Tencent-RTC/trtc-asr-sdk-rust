@@ -31,7 +31,10 @@ impl SpeechRecognitionListener for Printer {
     fn on_sentence_end(&self, resp: &SpeechRecognitionResponse) {
         println!(
             "[end] index={} text={} ({}-{}ms)",
-            resp.result.index, resp.result.voice_text_str, resp.result.start_time, resp.result.end_time
+            resp.result.index,
+            resp.result.voice_text_str,
+            resp.result.start_time,
+            resp.result.end_time
         );
         for seg in &resp.result.speaker_segments {
             let name = if seg.speaker_name.is_empty() {
@@ -39,7 +42,10 @@ impl SpeechRecognitionListener for Printer {
             } else {
                 seg.speaker_name.clone()
             };
-            println!("       [{name}] {} ({}-{}ms)", seg.text, seg.start_time, seg.end_time);
+            println!(
+                "       [{name}] {} ({}-{}ms)",
+                seg.text, seg.start_time, seg.end_time
+            );
         }
     }
     fn on_recognition_complete(&self, resp: &SpeechRecognitionResponse) {
@@ -60,8 +66,14 @@ fn main() {
     let engine = args.get(2).map(String::as_str).unwrap_or("16k_zh_en");
 
     let credential = Credential::new(
-        env::var("TRTC_ASR_APP_ID").expect("TRTC_ASR_APP_ID").parse().expect("TRTC_ASR_APP_ID must be an integer"),
-        env::var("TRTC_ASR_SDK_APP_ID").expect("TRTC_ASR_SDK_APP_ID").parse().expect("TRTC_ASR_SDK_APP_ID must be an integer"),
+        env::var("TRTC_ASR_APP_ID")
+            .expect("TRTC_ASR_APP_ID")
+            .parse()
+            .expect("TRTC_ASR_APP_ID must be an integer"),
+        env::var("TRTC_ASR_SDK_APP_ID")
+            .expect("TRTC_ASR_SDK_APP_ID")
+            .parse()
+            .expect("TRTC_ASR_SDK_APP_ID must be an integer"),
         env::var("TRTC_ASR_SECRET_KEY").expect("TRTC_ASR_SECRET_KEY"),
     );
 

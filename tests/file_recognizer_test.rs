@@ -13,7 +13,9 @@ use trtc_asr_sdk::asr::{
     CreateRecTaskRequest, FileRecognizer, TASK_STATUS_FAILED, TASK_STATUS_RUNNING,
     TASK_STATUS_SUCCESS, TASK_STATUS_WAITING,
 };
-use trtc_asr_sdk::common::errors::{ERR_CODE_INVALID_PARAM, ERR_CODE_SERVER_ERROR, ERR_CODE_TIMEOUT};
+use trtc_asr_sdk::common::errors::{
+    ERR_CODE_INVALID_PARAM, ERR_CODE_SERVER_ERROR, ERR_CODE_TIMEOUT,
+};
 use trtc_asr_sdk::common::{Credential, SpeakerRole, SPEAKER_DIARIZATION_VOICEPRINT};
 
 fn test_credential() -> Credential {
@@ -23,7 +25,11 @@ fn test_credential() -> Credential {
 fn create_success_server() -> MockHttpServer {
     MockHttpServer::start(|req| {
         assert_eq!(req.method, "POST");
-        assert!(req.target.starts_with("/v1/CreateRecTask?"), "{}", req.target);
+        assert!(
+            req.target.starts_with("/v1/CreateRecTask?"),
+            "{}",
+            req.target
+        );
         assert_eq!(
             req.header("Content-Type"),
             Some("application/json; charset=utf-8")
@@ -31,7 +37,10 @@ fn create_success_server() -> MockHttpServer {
         assert!(!req.header("X-TRTC-SdkAppId").unwrap_or("").is_empty());
         assert!(!req.header("X-TRTC-UserSig").unwrap_or("").is_empty());
         for key in ["AppId", "Secretid", "RequestId", "Timestamp"] {
-            assert!(!req.query(key).unwrap_or_default().is_empty(), "missing {key}");
+            assert!(
+                !req.query(key).unwrap_or_default().is_empty(),
+                "missing {key}"
+            );
         }
 
         let body: serde_json::Value = serde_json::from_str(&req.body).unwrap();
@@ -329,7 +338,11 @@ fn wait_for_result_polling_then_success() {
     r.set_endpoint(&server.url);
 
     let status = r
-        .wait_for_result_with_interval("task-poll", Duration::from_millis(50), Duration::from_secs(5))
+        .wait_for_result_with_interval(
+            "task-poll",
+            Duration::from_millis(50),
+            Duration::from_secs(5),
+        )
         .expect("wait");
     assert_eq!(status.result, "轮询成功");
     assert!(calls.load(Ordering::SeqCst) >= 3);
@@ -362,7 +375,11 @@ fn wait_for_result_timeout() {
     r.set_endpoint(&server.url);
 
     let err = r
-        .wait_for_result_with_interval("task-slow", Duration::from_millis(20), Duration::from_millis(100))
+        .wait_for_result_with_interval(
+            "task-slow",
+            Duration::from_millis(20),
+            Duration::from_millis(100),
+        )
         .unwrap_err();
     assert_eq!(err.code, ERR_CODE_TIMEOUT);
     assert!(err.message.contains("not completed"), "{}", err.message);

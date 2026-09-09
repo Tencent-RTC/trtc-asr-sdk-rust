@@ -2,7 +2,7 @@
 //! signature_test.go / signature_speaker_test.go.
 
 use trtc_asr_sdk::common::signature::{
-    query_escape, SpeakerRole, SignatureParams, SPEAKER_DIARIZATION_CLUSTER,
+    query_escape, SignatureParams, SpeakerRole, SPEAKER_DIARIZATION_CLUSTER,
     SPEAKER_DIARIZATION_VOICEPRINT,
 };
 
@@ -69,7 +69,10 @@ fn build_query_string_contains_required_keys() {
         assert!(qs.contains(key), "missing {key} in {qs}");
     }
     assert!(qs.contains("secretid=1300403317"));
-    assert!(!qs.contains("signature="), "must not contain signature: {qs}");
+    assert!(
+        !qs.contains("signature="),
+        "must not contain signature: {qs}"
+    );
 }
 
 #[test]
@@ -114,7 +117,10 @@ fn omits_unset_optional_params() {
         "sdkappid",
         "language",
     ] {
-        assert!(!qs.contains(&format!("{key}=")), "{key} should be omitted: {qs}");
+        assert!(
+            !qs.contains(&format!("{key}=")),
+            "{key} should be omitted: {qs}"
+        );
     }
 }
 
@@ -198,8 +204,14 @@ fn advanced_optional_params() {
     p.language = "zh".into();
 
     let qs = p.build_query_string();
-    assert_eq!(query_get(&qs, "hotword_list").as_deref(), Some("腾讯云|5,ASR|11"));
-    assert_eq!(query_get(&qs, "replace_text_id").as_deref(), Some("replace-1"));
+    assert_eq!(
+        query_get(&qs, "hotword_list").as_deref(),
+        Some("腾讯云|5,ASR|11")
+    );
+    assert_eq!(
+        query_get(&qs, "replace_text_id").as_deref(),
+        Some("replace-1")
+    );
     assert_eq!(query_get(&qs, "input_sample_rate").as_deref(), Some("8000"));
     assert_eq!(query_get(&qs, "language").as_deref(), Some("zh"));
 }
@@ -209,10 +221,16 @@ fn query_string_keys_are_sorted() {
     let mut p = SignatureParams::new(1300403317, "16k_zh", "voice-001");
     p.hotword_id = "hw".into();
     let qs = p.build_query_string_with_signature("sig");
-    let keys: Vec<&str> = qs.split('&').map(|kv| kv.splitn(2, '=').next().unwrap()).collect();
+    let keys: Vec<&str> = qs
+        .split('&')
+        .map(|kv| kv.splitn(2, '=').next().unwrap())
+        .collect();
     let mut sorted = keys.clone();
     sorted.sort();
-    assert_eq!(keys, sorted, "query keys must be sorted like Go's sort.Strings");
+    assert_eq!(
+        keys, sorted,
+        "query keys must be sorted like Go's sort.Strings"
+    );
 }
 
 #[test]

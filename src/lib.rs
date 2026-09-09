@@ -21,4 +21,7 @@
 //! ```
 
 pub mod asr;
+
+/// Re-export the v3 protocol client (see [`asr::v3`]).
+pub use asr::v3;
 pub mod common;

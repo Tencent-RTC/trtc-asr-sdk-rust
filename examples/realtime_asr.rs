@@ -59,11 +59,22 @@ impl SpeechRecognitionListener for Printer {
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("usage: {} <audio.pcm> [engine_model_type]", args[0]);
+        eprintln!("usage: {} <audio.pcm> <engine> [lang]", args[0]);
         std::process::exit(1);
     }
     let path = &args[1];
-    let engine = args.get(2).map(String::as_str).unwrap_or("16k_zh_en");
+    let engine = args.get(2).map(String::as_str).unwrap_or_else(|| {
+        eprintln!("error: engine argument is required (e.g. bigmodel)");
+        std::process::exit(2);
+    });
+    let lang_arg = args.get(3).map(String::as_str).unwrap_or("");
+    // The bigmodel engine is best used with an explicit language; every other
+    // engine falls back to server-side detection unless a lang argument is given.
+    let lang = if lang_arg.is_empty() && engine == "bigmodel" {
+        "zh"
+    } else {
+        lang_arg
+    };
 
     let credential = Credential::new(
         env::var("TRTC_ASR_APP_ID")
@@ -77,7 +88,8 @@ fn main() {
         env::var("TRTC_ASR_SECRET_KEY").expect("TRTC_ASR_SECRET_KEY"),
     );
 
-    let recognizer = SpeechRecognizer::new(credential, engine, Arc::new(Printer));
+    let mut recognizer = SpeechRecognizer::new(credential, engine, Arc::new(Printer));
+    recognizer.set_language(lang);
     // recognizer.set_speaker_diarization(trtc_asr_sdk::asr::SPEAKER_DIARIZATION_CLUSTER);
     // recognizer.set_word_info(1);
     recognizer.start().expect("start");

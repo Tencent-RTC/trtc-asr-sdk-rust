@@ -244,13 +244,25 @@ fn offline_body_value(
 /// POSTs a JSON body and returns (status, body). Transport errors map to
 /// ERR_CODE_CONNECT_FAILED; non-2xx statuses are returned to the caller (v3
 /// error bodies carry the authoritative numeric code).
-fn http_post_json(url: &str, body: &str, timeout: Duration) -> Result<(u16, String)> {
-    let agent = ureq::AgentBuilder::new()
-        // Share the WebSocket transport's rustls config (ring + system
-        // roots), mirroring the v2 HTTP clients.
+/// Builds the HTTP agent used by the offline v3 clients: the WebSocket
+/// transport's rustls config (ring + system roots) with the given timeout.
+///
+/// One agent is reused per client, mirroring the v2 HTTP clients. Verified on
+/// 2026-09-14 against the production endpoint: building a fresh agent per
+/// request made every v3 offline call fail the TLS handshake with
+/// "received corrupt message of type InvalidContentType", while the same
+/// configuration on a reused agent succeeds. The mechanism is not fully
+/// understood (the v2 clients have always reused their agent), so keep the
+/// reuse — reverting it silently breaks the v3 offline interfaces at runtime
+/// while every mock-based test still passes.
+fn http_agent(timeout: Duration) -> ureq::Agent {
+    ureq::AgentBuilder::new()
         .tls_config(crate::common::tls::rustls_client_config())
         .timeout(timeout)
-        .build();
+        .build()
+}
+
+fn http_post_json(agent: &ureq::Agent, url: &str, body: &str) -> Result<(u16, String)> {
     let resp = agent
         .post(url)
         .set("Content-Type", "application/json; charset=utf-8")
@@ -373,14 +385,18 @@ pub struct SentenceRecognizer {
     credential: Credential,
     endpoint: String,
     timeout: Duration,
+    /// Reused across requests; see [`http_agent`].
+    agent: ureq::Agent,
 }
 
 impl SentenceRecognizer {
     pub fn new(credential: Credential) -> Self {
+        let timeout = Duration::from_secs(30);
         SentenceRecognizer {
             credential,
             endpoint: String::new(),
-            timeout: Duration::from_secs(30),
+            timeout,
+            agent: http_agent(timeout),
         }
     }
 
@@ -392,6 +408,7 @@ impl SentenceRecognizer {
     /// Sets the HTTP request timeout.
     pub fn set_timeout(&mut self, timeout: Duration) {
         self.timeout = timeout;
+        self.agent = http_agent(timeout);
     }
 
     /// Sends a sentence recognition request and returns the result.
@@ -404,7 +421,7 @@ impl SentenceRecognizer {
             resolve_http_endpoint(&self.endpoint, &self.credential.site)?,
             "/v3/transcribe"
         );
-        let (status, resp_body) = http_post_json(&url, &body, self.timeout)?;
+        let (status, resp_body) = http_post_json(&self.agent, &url, &body)?;
         let data = decode_flat_response(&resp_body, status)?;
         let code = response_code(&data);
         if code != 0 {
@@ -446,6 +463,27 @@ impl SentenceRecognizer {
             data_len: data.len() as i64,
             ..Default::default()
         })
+    }
+
+    /// Recognizes local audio data with a pre-configured request: `data`,
+    /// `data_len` and `source_type` are filled in from `data`, while the
+    /// engine, language, word_info and the rest come from `req`.
+    pub fn recognize_data_with_options(
+        &self,
+        data: &[u8],
+        req: &mut TranscribeRequest,
+    ) -> Result<TranscribeResponse> {
+        if data.is_empty() {
+            return Err(invalid_param("audio data is empty"));
+        }
+        if data.len() > MAX_AUDIO_SIZE {
+            return Err(invalid_param("audio data exceeds 3MB limit"));
+        }
+        use base64::Engine as _;
+        req.source_type = SOURCE_TYPE_DATA;
+        req.data = B64.encode(data);
+        req.data_len = data.len() as i64;
+        self.recognize(req)
     }
 
     /// Recognizes audio from a URL.
@@ -601,14 +639,18 @@ pub struct FileRecognizer {
     credential: Credential,
     endpoint: String,
     timeout: Duration,
+    /// Reused across requests; see [`http_agent`].
+    agent: ureq::Agent,
 }
 
 impl FileRecognizer {
     pub fn new(credential: Credential) -> Self {
+        let timeout = Duration::from_secs(60);
         FileRecognizer {
             credential,
             endpoint: String::new(),
-            timeout: Duration::from_secs(60),
+            timeout,
+            agent: http_agent(timeout),
         }
     }
 
@@ -620,6 +662,7 @@ impl FileRecognizer {
     /// Sets the HTTP request timeout.
     pub fn set_timeout(&mut self, timeout: Duration) {
         self.timeout = timeout;
+        self.agent = http_agent(timeout);
     }
 
     /// Submits a file recognition task and returns the transcription ID.
@@ -632,7 +675,7 @@ impl FileRecognizer {
             resolve_http_endpoint(&self.endpoint, &self.credential.site)?,
             "/v3/create_transcription"
         );
-        let (status, resp_body) = http_post_json(&url, &body, self.timeout)?;
+        let (status, resp_body) = http_post_json(&self.agent, &url, &body)?;
         let data = decode_flat_response(&resp_body, status)?;
         let code = response_code(&data);
         if code != 0 {
@@ -678,6 +721,27 @@ impl FileRecognizer {
         })
     }
 
+    /// Submits local audio data with a pre-configured request: `data`,
+    /// `data_len` and `source_type` are filled in from `data`, while the
+    /// engine, language, hotwords and the rest come from `req`.
+    pub fn create_task_from_data_with_options(
+        &self,
+        data: &[u8],
+        req: &mut CreateTranscriptionRequest,
+    ) -> Result<String> {
+        if data.is_empty() {
+            return Err(invalid_param("audio data is empty"));
+        }
+        if data.len() > MAX_FILE_SIZE {
+            return Err(invalid_param("audio data exceeds 5MB limit"));
+        }
+        use base64::Engine as _;
+        req.source_type = SOURCE_TYPE_DATA;
+        req.data = B64.encode(data);
+        req.data_len = data.len() as i64;
+        self.create_task(req)
+    }
+
     /// Submits an audio URL. Audio ≤12h, ≤1GB.
     pub fn create_task_from_url(&self, audio_url: &str, engine_model_type: &str) -> Result<String> {
         if audio_url.is_empty() {
@@ -709,7 +773,7 @@ impl FileRecognizer {
             resolve_http_endpoint(&self.endpoint, &self.credential.site)?,
             "/v3/describe_transcription"
         );
-        let (status, resp_body) = http_post_json(&url, &body, self.timeout)?;
+        let (status, resp_body) = http_post_json(&self.agent, &url, &body)?;
         let data = decode_flat_response(&resp_body, status)?;
         let code = response_code(&data);
         if code != 0 {

@@ -3,25 +3,36 @@
 //! Credentials come from environment variables:
 //!   TRTC_ASR_APP_ID, TRTC_ASR_SDK_APP_ID, TRTC_ASR_SECRET_KEY
 //!
-//! Usage: cargo run --example sentence_asr -- <audio.pcm> [format] [engine]
+//! Usage: cargo run --example sentence_asr -- <audio.pcm> [format] [engine] [lang]
 
 use std::env;
 
-use trtc_asr_sdk::asr::SentenceRecognizer;
+use trtc_asr_sdk::asr::{SentenceRecognitionRequest, SentenceRecognizer};
 use trtc_asr_sdk::common::Credential;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         eprintln!(
-            "usage: {} <audio-file> [format=pcm] [engine=16k_zh_en]",
+            "usage: {} <audio-file> [format=pcm] <engine> [lang]",
             args[0]
         );
         std::process::exit(1);
     }
     let path = &args[1];
     let format = args.get(2).map(String::as_str).unwrap_or("pcm");
-    let engine = args.get(3).map(String::as_str).unwrap_or("16k_zh_en");
+    let engine = args.get(3).map(String::as_str).unwrap_or_else(|| {
+        eprintln!("error: engine argument is required (e.g. bigmodel)");
+        std::process::exit(2);
+    });
+    let lang_arg = args.get(4).map(String::as_str).unwrap_or("");
+    // The bigmodel engine is best used with an explicit language; every other
+    // engine falls back to server-side detection unless a lang argument is given.
+    let lang = if lang_arg.is_empty() && engine == "bigmodel" {
+        "zh"
+    } else {
+        lang_arg
+    };
 
     let credential = Credential::new(
         env::var("TRTC_ASR_APP_ID")
@@ -37,7 +48,13 @@ fn main() {
 
     let data = std::fs::read(path).expect("read audio file");
     let recognizer = SentenceRecognizer::new(credential);
-    match recognizer.recognize_data(&data, format, engine) {
+    let mut req = SentenceRecognitionRequest {
+        eng_service_type: engine.to_string(),
+        voice_format: format.to_string(),
+        language: lang.to_string(),
+        ..Default::default()
+    };
+    match recognizer.recognize_data_with_options(&data, &mut req) {
         Ok(result) => {
             println!("识别结果: {}", result.result);
             println!("音频时长: {} ms", result.audio_duration);

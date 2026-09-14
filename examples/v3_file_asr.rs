@@ -14,7 +14,9 @@
 
 use std::env;
 
-use trtc_asr_sdk::asr::v3::{new_credential, FileRecognizer};
+use trtc_asr_sdk::asr::v3::{
+    new_credential, CreateTranscriptionRequest, FileRecognizer, SOURCE_TYPE_URL,
+};
 
 fn main() {
     let sdk_app_id: i64 = env::var("TRTC_ASR_SDK_APP_ID")
@@ -28,9 +30,22 @@ fn main() {
     }
     let mut args = env::args().skip(1);
     let first = args.next().unwrap_or_default();
-    let engine = args.next().unwrap_or_else(|| "16k_zh_en".into());
+    let engine = args.next().unwrap_or_else(|| {
+        eprintln!("error: engine argument is required (e.g. bigmodel)");
+        std::process::exit(2);
+    });
+    let lang_arg = args.next().unwrap_or_default();
+    // The bigmodel engine is best used with an explicit language; every other
+    // engine falls back to server-side detection unless a lang argument is given.
+    let lang = if lang_arg.is_empty() && engine == "bigmodel" {
+        "zh".to_string()
+    } else {
+        lang_arg
+    };
     if first.is_empty() {
-        eprintln!("Usage: v3_file_asr <local.wav> | v3_file_asr -u <url> [engine]");
+        eprintln!(
+            "Usage: v3_file_asr <local.wav> <engine> [lang] | v3_file_asr -u <url> <engine> [lang]"
+        );
         std::process::exit(1);
     }
 
@@ -38,15 +53,21 @@ fn main() {
     let credential = new_credential(sdk_app_id, secret_key);
     let recognizer = FileRecognizer::new(credential);
 
+    let mut req = CreateTranscriptionRequest {
+        engine_model_type: engine.clone(),
+        channel_num: 1,
+        res_text_format: 1,
+        language: lang.clone(),
+        ..Default::default()
+    };
     let task_id = if first == "-u" {
-        let url = args.next().unwrap_or_default();
-        recognizer
-            .create_task_from_url(&url, &engine)
-            .expect("create task failed")
+        req.source_type = SOURCE_TYPE_URL;
+        req.url = args.next().unwrap_or_default();
+        recognizer.create_task(&req).expect("create task failed")
     } else {
         let data = std::fs::read(&first).expect("read audio file");
         recognizer
-            .create_task_from_data(&data, &engine)
+            .create_task_from_data_with_options(&data, &mut req)
             .expect("create task failed")
     };
     println!("Task created: {task_id}");

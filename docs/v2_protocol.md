@@ -50,7 +50,7 @@
 | `timestamp` | 是 | Integer | 当前 UNIX 时间戳（秒） |
 | `expired` | 是 | Integer | 签名有效期截止时间戳，必须大于 timestamp |
 | `nonce` | 是 | Integer | 随机正整数，最长10位 |
-| `engine_model_type` | 是 | String | 引擎类型：`8k_zh`(中文电话)、`16k_zh`(中文通用)、`16k_zh_en`(中英文) |
+| `engine_model_type` | 是 | String | 引擎类型：`bigmodel`(大模型，推荐，配 `language`)、`8k_zh`(中文电话)、`16k_zh`(中文通用)、`16k_zh_en`(中英文) |
 | `voice_id` | 是 | String | 音频流全局唯一标识（推荐 UUID），最长128位 |
 | `voice_format` | 否 | Integer | 语音编码：`1` PCM（默认） |
 | `needvad` | 否 | Integer | `0` 关闭 VAD，`1` 开启（默认） |
@@ -177,7 +177,7 @@ HTTP 接口的鉴权信息携带在请求 Header 中（与流式不同，不走 
 
 | 参数 | 必填 | 类型 | 说明 |
 |------|------|------|------|
-| `EngSerViceType` | 是 | String | 引擎类型：`16k_zh`(中文)、`16k_zh_en`(中英文) |
+| `EngSerViceType` | 是 | String | 引擎类型：`bigmodel`(大模型，推荐)、`16k_zh`(中文)、`16k_zh_en`(中英文) |
 | `SourceType` | 是 | Integer | `0` URL 上传、`1` 本地数据（base64） |
 | `VoiceFormat` | 是 | String | 音频格式：`wav`、`pcm`、`ogg-opus`、`mp3`、`m4a` |
 | `Data` | 条件 | String | base64 编码的音频数据（SourceType=1 时必填） |
@@ -214,7 +214,7 @@ HTTP 接口的鉴权信息携带在请求 Header 中（与流式不同，不走 
 
 | 参数 | 必填 | 类型 | 说明 |
 |------|------|------|------|
-| `EngineModelType` | 是 | String | 引擎类型：`16k_zh`(中文)、`16k_zh_en`(中英文) |
+| `EngineModelType` | 是 | String | 引擎类型：`bigmodel`(大模型，推荐)、`16k_zh`(中文)、`16k_zh_en`(中英文) |
 | `ChannelNum` | 是 | Integer | 声道数：`1` 单声道；`2` 双声道（8k 电话，自动区分说话人并返回 `ChannelId`：1=左/2=右） |
 | `ResTextFormat` | 是 | Integer | 结果格式：`0` 基础、`1` 含词级时间、`2` 含标点时间 |
 | `SourceType` | 是 | Integer | `0` URL 上传、`1` 本地数据（base64） |
@@ -338,19 +338,19 @@ recognizer.stop()?;                        // 发送结束信号并等待最终�
 
 ```rust
 let recognizer = trtc_asr_sdk::asr::SentenceRecognizer::new(credential);
-let result = recognizer.recognize_data(&pcm_bytes, "pcm", "16k_zh_en")?;
+let result = recognizer.recognize_data(&pcm_bytes, "pcm", "bigmodel")?;
 println!("识别结果: {} ({} ms)", result.result, result.audio_duration);
-// 或从 URL：recognizer.recognize_url("https://example.com/a.wav", "wav", "16k_zh_en")
+// 或从 URL：recognizer.recognize_url("https://example.com/a.wav", "wav", "bigmodel")
 ```
 
 ### 录音文件识别
 
 ```rust
 let recognizer = trtc_asr_sdk::asr::FileRecognizer::new(credential);
-let task_id = recognizer.create_task_from_data(&pcm_bytes, "pcm", "16k_zh_en")?;
+let task_id = recognizer.create_task_from_data(&pcm_bytes, "pcm", "bigmodel")?;
 let status = recognizer.wait_for_result(&task_id)?;   // 默认 1s 轮询，10min 超时
 println!("识别结果: {}", status.result);
-// 或从 URL（≤1GB / ≤12h）：recognizer.create_task_from_url("https://example.com/a.wav", "16k_zh_en")
+// 或从 URL（≤1GB / ≤12h）：recognizer.create_task_from_url("https://example.com/a.wav", "bigmodel")
 ```
 
 ## 设计说明
@@ -382,9 +382,9 @@ export TRTC_ASR_APP_ID=13xxxxxxxx
 export TRTC_ASR_SDK_APP_ID=14xxxxxxxx
 export TRTC_ASR_SECRET_KEY=your-sdk-secret-key
 
-cargo run --example realtime_asr -- path/to/audio.pcm
-cargo run --example sentence_asr -- path/to/audio.pcm pcm 16k_zh_en
-cargo run --example file_asr -- path/to/audio.pcm
+cargo run --example realtime_asr -- path/to/audio.pcm bigmodel
+cargo run --example sentence_asr -- path/to/audio.pcm pcm bigmodel zh
+cargo run --example file_asr -- path/to/audio.pcm bigmodel
 ```
 
 ## License

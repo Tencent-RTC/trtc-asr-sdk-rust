@@ -7,8 +7,25 @@
 
 ## [未发布]
 
+### 变更
+
+- 示例与 README 的默认引擎由 `16k_zh_en` 改为 `bigmodel`（推荐用法）；
+  `engine_model_type` 为必填项，示例不再提供默认值（缺失时打印用法并以
+  退出码 2 结束）；`language` 未显式指定时仅 `bigmodel` 默认补 `zh`，
+  其他引擎保持服务端自动检测；参数表与引擎列表同步更新。
+- 补齐 v3 的 `FileRecognizer::create_task_from_data_with_options` 与
+  `SentenceRecognizer::recognize_data_with_options`，与 v2 及其他语言 SDK
+  的 `*_with_options` 形态保持一致。
+
 ### 修复
 
+- **v3 离线接口（一句话 / 录音文件）TLS 握手失败**：`SentenceRecognizer` /
+  `FileRecognizer` 每次请求都新建 `ureq::Agent`，对生产端点握手时报
+  `received corrupt message of type InvalidContentType`，导致 v3 离线接口
+  在真实网络下完全不可用（v2 复用 agent 所以正常，问题此前被 mock 测试
+  掩盖）。现在两个客户端各持有一个复用的 agent（`set_timeout` 重建），
+  与 v2 的形态一致。根因机制未完全定位，但 2026-09-14 在生产端点对比验证
+  过「复用 agent 成功 / 每请求新建失败」，请勿改回 per-request agent。
 - **录音文件识别（v2）词级时间戳恒为 0**：`describe_task_status` 返回的
   `ResultDetail[].Words[]` 里时间偏移字段名是 `StartTime` / `EndTime`，
   SDK 此前按 `OffsetStartMs` / `OffsetEndMs` 解析，取不到值，导致

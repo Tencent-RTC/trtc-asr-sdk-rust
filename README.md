@@ -62,7 +62,7 @@ WebSocket 建连后 **3 秒内**发送首帧 JSON：
 {
   "type": "start",
   "auth": {"sdkappid": "1400000001", "usersig": "eJw..."},
-  "params": {"engine_model_type": "16k_zh_en", "voice_format": 1, "needvad": 1}
+  "params": {"engine_model_type": "bigmodel", "language": "zh", "voice_format": 1, "needvad": 1}
 }
 ```
 
@@ -128,8 +128,8 @@ sequenceDiagram
 | 参数 | 类型 | 默认 | 说明 |
 |------|------|------|------|
 | `voice_id` | string | 取 URL | 流唯一标识（≤128 字符），与 URL 一致或省略 |
-| `engine_model_type` | string | `16k_zh_en` | 引擎模型 |
-| `language` | string | 空 | 识别语言（`zh`/`en`/`ja`…），空=自动检测 |
+| `engine_model_type` | string | **必填** | 引擎模型，无默认值，必填；示例取 `bigmodel`（推荐，配 `language`） |
+| `language` | string | 空 | 识别语言（`zh`/`en`/`ja`…），空=自动检测；`bigmodel` 建议显式指定（如 `zh`） |
 | `voice_format` | int | `1` | 音频格式：`1`pcm/`4`speex/`6`silk/`8`mp3/`10`opus/`11`ogg/`12`wav/`14`m4a/`16`aac |
 | `input_sample_rate` | int | 不传 | 仅 `8000`：声明 8k PCM 输入，配 16k 引擎升采样 |
 | `needvad` | int | 引擎相关 | `0` 关 / `1` 开 VAD |
@@ -181,7 +181,7 @@ sequenceDiagram
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `engine_model_type` | string | 是 | 引擎模型 |
+| `engine_model_type` | string | 是 | 引擎模型，必填；示例取 `bigmodel`（推荐，配 `language`） |
 | `source_type` | int | 是 | `0` URL 上传 / `1` 本地数据（base64） |
 | `voice_format` | string | 是 | 音频格式：`wav`、`pcm`、`ogg-opus`、`mp3`、`m4a` |
 | `url` | string | 条件 | 音频 URL（`source_type=0` 必填） |
@@ -271,8 +271,10 @@ fn main() {
     let credential = new_credential(1400000000, "your-sdk-secret-key");
     // credential.set_site(SITE_INTL);  // 国际站；不调用则走国内站
 
-    // start/write/stop 取 &self，无需 mut（params 在 RefCell 中）。
-    let recognizer = SpeechRecognizer::new(credential, "16k_zh_en", Arc::new(MyListener));
+    // start/write/stop 取 &self，无需 mut（params 在 RefCell 中）；
+    // set_language 这类 setter 需要 mut。
+    let mut recognizer = SpeechRecognizer::new(credential, "bigmodel", Arc::new(MyListener));
+    recognizer.set_language("zh"); // bigmodel 建议显式指定语种
 
     // start() 同步等待服务端 ack；鉴权/参数错误在这里返回。
     recognizer.start().expect("start failed");
@@ -285,14 +287,20 @@ fn main() {
 ### 一句话识别
 
 ```rust
-use trtc_asr_sdk::asr::v3::{new_credential, SentenceRecognizer};
+use trtc_asr_sdk::asr::v3::{new_credential, SentenceRecognizer, TranscribeRequest};
 
 fn main() {
     let credential = new_credential(1400000000, "your-sdk-secret-key");
     let recognizer = SentenceRecognizer::new(credential);
 
     let data = std::fs::read("audio.pcm").unwrap();
-    let resp = recognizer.recognize_data(&data, "pcm", "16k_zh_en").unwrap();
+    let mut req = TranscribeRequest {
+        engine_model_type: "bigmodel".into(),
+        voice_format: "pcm".into(),
+        language: "zh".into(),
+        ..Default::default()
+    };
+    let resp = recognizer.recognize_data_with_options(&data, &mut req).unwrap();
     println!("{} ({} ms)", resp.result, resp.audio_duration);
 }
 ```
@@ -300,14 +308,24 @@ fn main() {
 ### 录音文件识别
 
 ```rust
-use trtc_asr_sdk::asr::v3::{new_credential, FileRecognizer};
+use trtc_asr_sdk::asr::v3::{
+    new_credential, CreateTranscriptionRequest, FileRecognizer, SOURCE_TYPE_URL,
+};
 
 fn main() {
     let credential = new_credential(1400000000, "your-sdk-secret-key");
     let recognizer = FileRecognizer::new(credential);
 
     let task_id = recognizer
-        .create_task_from_url("https://example.com/audio.wav", "16k_zh_en")
+        .create_task(&CreateTranscriptionRequest {
+            engine_model_type: "bigmodel".into(),
+            channel_num: 1,
+            res_text_format: 1,
+            source_type: SOURCE_TYPE_URL,
+            url: "https://example.com/audio.wav".into(),
+            language: "zh".into(),
+            ..Default::default()
+        })
         .unwrap();
     let status = recognizer.wait_for_result(&task_id).unwrap(); // 轮询直至完成
     println!("{} ({:.2} s)", status.result, status.audio_duration);
@@ -359,9 +377,12 @@ fn main() {
 
 | 类型 | 说明 |
 |------|------|
+| `bigmodel` | 大模型引擎，推荐；配合 `language` 指定语种（如 `zh`） |
 | `8k_zh` | 中文通用，常用于电话场景 |
-| `16k_zh` | 中文通用（推荐） |
+| `16k_zh` | 中文通用 |
 | `16k_zh_en` | 中英文通用 |
+
+> `bigmodel` 的 `language` 不只是提示：服务端按它选择后端模型（`zh` 走自研大模型，留空走通用链路）。示例默认 `bigmodel` + `zh`。
 
 ## 示例
 
@@ -375,7 +396,7 @@ fn main() {
 - **录音文件识别（v2）**：[`examples/file_asr.rs`](./examples/file_asr.rs)
 
 ```bash
-cargo run --example v3_realtime_asr -- examples/test.pcm
+cargo run --example v3_realtime_asr -- examples/test.pcm bigmodel
 ```
 
 ## 项目结构

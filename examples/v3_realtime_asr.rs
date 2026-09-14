@@ -63,13 +63,25 @@ fn main() {
 
     let mut args = env::args().skip(1);
     let path = args.next().unwrap_or_else(|| "examples/test.pcm".into());
-    let engine = args.next().unwrap_or_else(|| "16k_zh_en".into());
+    let engine = args.next().unwrap_or_else(|| {
+        eprintln!("error: engine argument is required (e.g. bigmodel)");
+        std::process::exit(2);
+    });
+    let lang_arg = args.next().unwrap_or_default();
+    // The bigmodel engine is best used with an explicit language; every other
+    // engine falls back to server-side detection unless a lang argument is given.
+    let lang = if lang_arg.is_empty() && engine == "bigmodel" {
+        "zh".to_string()
+    } else {
+        lang_arg
+    };
 
     // v3 credentials need only SdkAppID + SecretKey (no Tencent Cloud APPID).
     let credential = new_credential(sdk_app_id, secret_key);
     // start/write/stop take &self (the params live in a RefCell), so no `mut`
-    // is needed unless a setter such as set_endpoint is called.
-    let recognizer = SpeechRecognizer::new(credential, engine, Arc::new(Printer));
+    // is needed unless a setter such as set_language is called.
+    let mut recognizer = SpeechRecognizer::new(credential, engine, Arc::new(Printer));
+    recognizer.set_language(lang);
 
     // start() waits synchronously for the server's ack: authentication (4002)
     // and gray-switch (4001) errors are returned here, not via on_fail.

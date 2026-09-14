@@ -14,7 +14,7 @@
 
 use std::env;
 
-use trtc_asr_sdk::asr::v3::{new_credential, SentenceRecognizer};
+use trtc_asr_sdk::asr::v3::{new_credential, SentenceRecognizer, TranscribeRequest};
 
 fn main() {
     let sdk_app_id: i64 = env::var("TRTC_ASR_SDK_APP_ID")
@@ -28,15 +28,32 @@ fn main() {
     }
     let mut args = env::args().skip(1);
     let path = args.next().unwrap_or_else(|| "examples/test.pcm".into());
-    let engine = args.next().unwrap_or_else(|| "16k_zh_en".into());
+    let engine = args.next().unwrap_or_else(|| {
+        eprintln!("error: engine argument is required (e.g. bigmodel)");
+        std::process::exit(2);
+    });
+    let lang_arg = args.next().unwrap_or_default();
+    // The bigmodel engine is best used with an explicit language; every other
+    // engine falls back to server-side detection unless a lang argument is given.
+    let lang = if lang_arg.is_empty() && engine == "bigmodel" {
+        "zh".to_string()
+    } else {
+        lang_arg
+    };
 
     // v3 credentials need only SdkAppID + SecretKey (no Tencent Cloud APPID).
     let credential = new_credential(sdk_app_id, secret_key);
     let recognizer = SentenceRecognizer::new(credential);
 
     let data = std::fs::read(&path).expect("read audio file");
+    let mut req = TranscribeRequest {
+        engine_model_type: engine.clone(),
+        voice_format: "pcm".into(),
+        language: lang.clone(),
+        ..Default::default()
+    };
     let resp = recognizer
-        .recognize_data(&data, "pcm", &engine)
+        .recognize_data_with_options(&data, &mut req)
         .expect("recognize failed");
 
     println!("Result: {}", resp.result);

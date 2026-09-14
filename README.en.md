@@ -63,7 +63,7 @@ Within **3 seconds** of the WebSocket handshake, send one start frame:
 {
   "type": "start",
   "auth": {"sdkappid": "1400000001", "usersig": "eJw..."},
-  "params": {"engine_model_type": "16k_zh_en", "voice_format": 1, "needvad": 1}
+  "params": {"engine_model_type": "bigmodel", "language": "zh", "voice_format": 1, "needvad": 1}
 }
 ```
 
@@ -129,8 +129,8 @@ sequenceDiagram
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `voice_id` | string | from URL | Stream ID (<=128 chars); same as the URL or omitted |
-| `engine_model_type` | string | `16k_zh_en` | Engine model |
-| `language` | string | empty | Language hint (`zh`, `en`, `ja`, …); empty = auto detect |
+| `engine_model_type` | string | **required** | Engine model; no default, must be provided. The examples pass `bigmodel` (recommended, with `language`) |
+| `language` | string | empty | Language hint (`zh`, `en`, `ja`, …); empty = auto detect. `bigmodel` is best used with an explicit value (e.g. `zh`) |
 | `voice_format` | int | `1` | Audio format: `1`pcm/`4`speex/`6`silk/`8`mp3/`10`opus/`11`ogg/`12`wav/`14`m4a/`16`aac |
 | `input_sample_rate` | int | — | Only `8000`: declare 8k PCM input for a 16k engine |
 | `needvad` | int | engine default | `0` off / `1` on |
@@ -182,7 +182,7 @@ With diarization on, speaker attribution comes through `result.speaker_segments[
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `engine_model_type` | string | yes | Engine model |
+| `engine_model_type` | string | yes | Engine model, required; the examples pass `bigmodel` (recommended, with `language`) |
 | `source_type` | int | yes | `0` URL / `1` local data (base64) |
 | `voice_format` | string | yes | `wav`, `pcm`, `ogg-opus`, `mp3`, `m4a` |
 | `url` | string | conditional | Audio URL (required when `source_type=0`) |
@@ -273,8 +273,9 @@ fn main() {
     // credential.set_site(SITE_INTL);  // international site
 
     // start/write/stop take &self (params live in a RefCell), so no `mut`
-    // is needed unless a setter such as set_endpoint is called.
-    let recognizer = SpeechRecognizer::new(credential, "16k_zh_en", Arc::new(MyListener));
+    // is needed unless a setter such as set_language is called.
+    let mut recognizer = SpeechRecognizer::new(credential, "bigmodel", Arc::new(MyListener));
+    recognizer.set_language("zh"); // bigmodel works best with an explicit language
 
     // start() waits synchronously for the server ack; auth/param errors return here.
     recognizer.start().expect("start failed");
@@ -287,14 +288,20 @@ fn main() {
 ### Sentence recognition
 
 ```rust
-use trtc_asr_sdk::asr::v3::{new_credential, SentenceRecognizer};
+use trtc_asr_sdk::asr::v3::{new_credential, SentenceRecognizer, TranscribeRequest};
 
 fn main() {
     let credential = new_credential(1400000000, "your-sdk-secret-key");
     let recognizer = SentenceRecognizer::new(credential);
 
     let data = std::fs::read("audio.pcm").unwrap();
-    let resp = recognizer.recognize_data(&data, "pcm", "16k_zh_en").unwrap();
+    let mut req = TranscribeRequest {
+        engine_model_type: "bigmodel".into(),
+        voice_format: "pcm".into(),
+        language: "zh".into(),
+        ..Default::default()
+    };
+    let resp = recognizer.recognize_data_with_options(&data, &mut req).unwrap();
     println!("{} ({} ms)", resp.result, resp.audio_duration);
 }
 ```
@@ -302,14 +309,24 @@ fn main() {
 ### Audio file recognition
 
 ```rust
-use trtc_asr_sdk::asr::v3::{new_credential, FileRecognizer};
+use trtc_asr_sdk::asr::v3::{
+    new_credential, CreateTranscriptionRequest, FileRecognizer, SOURCE_TYPE_URL,
+};
 
 fn main() {
     let credential = new_credential(1400000000, "your-sdk-secret-key");
     let recognizer = FileRecognizer::new(credential);
 
     let task_id = recognizer
-        .create_task_from_url("https://example.com/audio.wav", "16k_zh_en")
+        .create_task(&CreateTranscriptionRequest {
+            engine_model_type: "bigmodel".into(),
+            channel_num: 1,
+            res_text_format: 1,
+            source_type: SOURCE_TYPE_URL,
+            url: "https://example.com/audio.wav".into(),
+            language: "zh".into(),
+            ..Default::default()
+        })
         .unwrap();
     let status = recognizer.wait_for_result(&task_id).unwrap();
     println!("{} ({:.2} s)", status.result, status.audio_duration);
@@ -356,10 +373,12 @@ Realtime recognition (`v3::SpeechRecognizer`); setters mirror the v2 client:
 
 | Value | Description |
 |-------|-------------|
+| `bigmodel` | Large model engine, recommended; pair it with `language` (e.g. `zh`) |
 | `8k_zh` | Chinese, telephony |
-| `16k_zh` | Chinese, general (recommended) |
+| `16k_zh` | Chinese, general |
 | `16k_zh_en` | Chinese + English |
-| `bigmodel` | Large model engine (multi-language) |
+
+> For `bigmodel`, `language` is not just a hint: the server picks the backend model from it (`zh` routes to the self-developed large model, empty routes to the generic pipeline). The examples default to `bigmodel` + `zh`.
 
 ## Examples
 

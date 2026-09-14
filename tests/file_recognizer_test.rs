@@ -10,7 +10,7 @@ use std::time::Duration;
 use common::{MockHttpResponse, MockHttpServer};
 
 use trtc_asr_sdk::asr::{
-    CreateRecTaskRequest, FileRecognizer, TASK_STATUS_FAILED, TASK_STATUS_RUNNING,
+    CreateRecTaskRequest, FileRecognizer, SentenceWords, TASK_STATUS_FAILED, TASK_STATUS_RUNNING,
     TASK_STATUS_SUCCESS, TASK_STATUS_WAITING,
 };
 use trtc_asr_sdk::common::errors::{
@@ -271,7 +271,7 @@ fn describe_task_status_success_with_details() {
                     "FinalSentence":"今天天气不错。","SliceSentence":"今天 天气 不错",
                     "StartMs":200,"EndMs":1380,"WordsNum":1,"SpeechSpeed":2.0,
                     "SpeakerId":1,"SpeakerRoleName":"teacher","ChannelId":0,"Language":"zh",
-                    "Words":[{"Word":"今天","OffsetStartMs":200,"OffsetEndMs":500}]
+                    "Words":[{"Word":"今天","StartTime":200,"EndTime":500}]
                 }]
             },"RequestId":"req-123"}}"#,
         )
@@ -290,6 +290,24 @@ fn describe_task_status_success_with_details() {
     assert_eq!(detail.speaker_role_name, "teacher");
     assert_eq!(detail.language, "zh");
     assert_eq!(detail.words[0].word, "今天");
+    assert_eq!(detail.words[0].offset_start_ms, 200);
+    assert_eq!(detail.words[0].offset_end_ms, 500);
+}
+
+#[test]
+fn sentence_words_accepts_both_offset_spellings() {
+    // The server spells the offsets StartTime / EndTime.
+    let primary: SentenceWords =
+        serde_json::from_str(r#"{"Word":"今","StartTime":0,"EndTime":160}"#).unwrap();
+    assert_eq!(primary.word, "今");
+    assert_eq!(primary.offset_start_ms, 0);
+    assert_eq!(primary.offset_end_ms, 160);
+
+    // The older OffsetStartMs / OffsetEndMs spelling still parses.
+    let fallback: SentenceWords =
+        serde_json::from_str(r#"{"Word":"今","OffsetStartMs":120,"OffsetEndMs":640}"#).unwrap();
+    assert_eq!(fallback.offset_start_ms, 120);
+    assert_eq!(fallback.offset_end_ms, 640);
 }
 
 #[test]

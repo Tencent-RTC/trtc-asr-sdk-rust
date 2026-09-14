@@ -7,6 +7,15 @@
 
 ## [未发布]
 
+### 修复
+
+- **录音文件识别（v2）词级时间戳恒为 0**：`describe_task_status` 返回的
+  `ResultDetail[].Words[]` 里时间偏移字段名是 `StartTime` / `EndTime`，
+  SDK 此前按 `OffsetStartMs` / `OffsetEndMs` 解析，取不到值，导致
+  `SentenceWords::offset_start_ms` / `offset_end_ms` 全部为 0。现在
+  `StartTime` / `EndTime` 为主名，`serde` 的 `alias` 保留
+  `OffsetStartMs` / `OffsetEndMs` 作为回退兼容。
+
 ## [1.2.1] - 2026-09-10
 
 ### 变更

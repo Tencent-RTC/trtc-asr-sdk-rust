@@ -225,13 +225,17 @@ pub struct SentenceDetail {
 }
 
 /// Word-level timing within a sentence.
+///
+/// Offsets are milliseconds relative to the start of the audio. On the wire
+/// the server spells them `StartTime` / `EndTime`; the older
+/// `OffsetStartMs` / `OffsetEndMs` spelling is accepted as a fallback.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SentenceWords {
     #[serde(rename = "Word", default)]
     pub word: String,
-    #[serde(rename = "OffsetStartMs", default)]
+    #[serde(rename = "StartTime", alias = "OffsetStartMs", default)]
     pub offset_start_ms: i64,
-    #[serde(rename = "OffsetEndMs", default)]
+    #[serde(rename = "EndTime", alias = "OffsetEndMs", default)]
     pub offset_end_ms: i64,
 }
 

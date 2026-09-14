@@ -16,8 +16,6 @@
 - **国内站**：[快速接入指南](https://xai.cloud-rtc.com/#gettingStarted) — 注册腾讯云账号并完成实名认证 → 在 [TRTC 控制台](https://console.cloud.tencent.com/trtc/app)创建应用 → 开通「AI 智能识别」（体验版可免费试用）
 - **国际站**：[Quick Start](https://xai-intl.cloud-rtc.com/#gettingStarted) — 在 [trtc.io](https://www.trtc.io) 注册（自动开通 Tencentcloud 账号，无需实名认证）→ 在 [console.trtc.io](https://console.trtc.io) 创建应用 → 开通「AI Speech Recognition」（仅 RTC Engine Lite 及以上包月套餐，Free Trial 不支持）
 
-> **v3 灰度**：v3 四个接口受服务端 `EnableV3Route` 灰度开关（SDKAppID 维度）控制。未开启时在线回 `4001`、离线回 HTTP 404。接入前请先联系服务团队为您的 SDKAppID 开启。
-
 ## 协议说明（v3）
 
 ### 接口路径

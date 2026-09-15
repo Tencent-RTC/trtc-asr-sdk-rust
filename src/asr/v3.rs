@@ -1355,6 +1355,10 @@ impl SpeechRecognizer {
             )));
         }
 
+        // Announce the write before contending for the socket so the polling
+        // reader yields it (see `Shared::writer_ticket`). Declared before the
+        // guard, so it is dropped after the guard is released.
+        let _ticket = self.shared.writer_ticket();
         let mut guard = self.shared.ws.lock().unwrap();
         let ws = match guard.as_mut() {
             Some(ws) => ws,

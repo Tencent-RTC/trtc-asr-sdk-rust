@@ -29,7 +29,7 @@
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, Once};
 use std::thread;
 use std::time::Duration;
@@ -149,9 +149,17 @@ impl Write for Stream {
 /// thread. pub(crate) so the v3 module reuses the identical lifecycle.
 pub(crate) struct Shared {
     pub(crate) state: AtomicU8,
-    /// The WebSocket connection. Reads hold the lock for at most
-    /// [`READ_POLL_INTERVAL`] (socket read timeout), so writers and `close`
-    /// never block long.
+    /// The WebSocket connection. `tungstenite` needs `&mut` for both reading
+    /// and sending, so reads and writes share this single mutex.
+    ///
+    /// A bounded read timeout ([`READ_POLL_INTERVAL`]) caps how long one read
+    /// holds the lock, but that alone does not bound how long a *writer*
+    /// waits: the reader re-acquires immediately after each poll, and
+    /// `std::sync::Mutex` is not fair on Linux (futex-based, allows barging),
+    /// so the reader can win every round and starve writers indefinitely.
+    /// Writers therefore announce themselves via [`Shared::writer_ticket`] and
+    /// the reader yields the socket to them (see
+    /// [`Shared::yield_to_pending_writers`]).
     pub(crate) ws: Mutex<Option<WebSocket<Stream>>>,
     /// Force-close handle: a cloned fd of the underlying socket. Shutting it
     /// down unblocks any in-flight read/write with an I/O error.
@@ -167,6 +175,11 @@ pub(crate) struct Shared {
     /// reader waits for this handoff instead of racing `stop` to re-acquire
     /// the WebSocket mutex after each polling read.
     end_signal_sent: AtomicBool,
+    /// Number of writers that want the [`ws`](Self::ws) mutex right now
+    /// (audio writes; `stop` uses the stronger end-signal handoff above).
+    /// Maintained by [`WriterTicket`]; the reader consults it before each
+    /// polling read and steps aside while it is non-zero.
+    pending_writers: AtomicUsize,
     /// Sticky flag raised when a handoff hit its liveness deadline. From then
     /// on the reader stops yielding the socket: nobody is going to publish
     /// the end frame any more, and re-arming the deadline every round would
@@ -317,6 +330,52 @@ impl Shared {
         self.state.load(Ordering::SeqCst)
     }
 
+    /// Announces that the caller is about to contend for the
+    /// [`ws`](Self::ws) mutex in order to write. The reader steps aside for
+    /// the lifetime of the returned ticket, which must therefore be created
+    /// *before* locking and dropped *after* the guard is released.
+    pub(crate) fn writer_ticket(&self) -> WriterTicket<'_> {
+        self.pending_writers.fetch_add(1, Ordering::SeqCst);
+        WriterTicket { shared: self }
+    }
+
+    /// Reader-side half of the writer handoff: yields the socket to any
+    /// announced writer before contending for the mutex again.
+    ///
+    /// Without this, the reader's "release then immediately re-acquire" loop
+    /// leaves writers a window of only a few microseconds per round. That is
+    /// enough on macOS (pthread mutexes hand off to a waiter) but not on
+    /// Linux, where the futex-based mutex lets the running thread barge ahead
+    /// of parked waiters; measured in isolation, a writer got the lock 61768
+    /// times in 5s on macOS versus 6 times on Linux.
+    ///
+    /// Bounded in both directions:
+    /// - A writer waits at most one in-flight read plus one contended round
+    ///   (~2 × [`READ_POLL_INTERVAL`]) before the reader stops competing.
+    /// - The reader yields for at most [`READ_POLL_INTERVAL`], so a saturated
+    ///   writer cannot starve the reader in turn and leave the socket
+    ///   unattended.
+    ///
+    /// Costs one relaxed-path atomic load when no writer is pending, which is
+    /// the steady state between audio frames.
+    fn yield_to_pending_writers(&self) {
+        if self.pending_writers.load(Ordering::SeqCst) == 0 {
+            return;
+        }
+        let (done_lock, cvar) = &self.done;
+        let deadline = std::time::Instant::now() + READ_POLL_INTERVAL;
+        let mut guard = done_lock.lock().unwrap();
+        while self.pending_writers.load(Ordering::SeqCst) > 0 && self.state() != STATE_STOPPED {
+            // Absolute deadline: spurious wakes must not extend the yield.
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                break;
+            }
+            let (g, _) = cvar.wait_timeout(guard, deadline - now).unwrap();
+            guard = g;
+        }
+    }
+
     /// IDLE → STARTING CAS for start(); shared with the v3 module.
     pub(crate) fn compare_exchange_starting(&self) -> std::result::Result<(), u8> {
         let _guard = self.done.0.lock().unwrap();
@@ -349,6 +408,37 @@ impl Shared {
 
     pub(crate) fn wait_for_read_loop_or_close_pub(&self) {
         self.wait_for_read_loop_or_close_impl();
+    }
+}
+
+/// RAII registration of a pending writer (see [`Shared::writer_ticket`]).
+///
+/// Create it *before* locking [`Shared::ws`] and keep it alive until the
+/// guard is dropped, so that early returns still deregister. Declared before
+/// the guard, it is dropped after it: the socket mutex is always released
+/// before `done.0` is taken, matching the lock order used everywhere else
+/// (nobody takes the socket mutex while holding `done.0`).
+pub(crate) struct WriterTicket<'a> {
+    shared: &'a Shared,
+}
+
+impl Drop for WriterTicket<'_> {
+    fn drop(&mut self) {
+        // Update the count under done.0 (the mutex paired with the condvar
+        // the reader waits on) so a reader that just evaluated the predicate
+        // cannot miss this wakeup.
+        let last = {
+            let _guard = self
+                .shared
+                .done
+                .0
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            self.shared.pending_writers.fetch_sub(1, Ordering::SeqCst) == 1
+        };
+        if last {
+            self.shared.done.1.notify_all();
+        }
     }
 }
 
@@ -400,6 +490,7 @@ pub(crate) fn new_shared() -> Arc<Shared> {
         done: (Mutex::new(false), Condvar::new()),
         terminal_received: AtomicBool::new(false),
         end_signal_sent: AtomicBool::new(false),
+        pending_writers: AtomicUsize::new(0),
         handoff_expired: AtomicBool::new(false),
         #[cfg(test)]
         handoff_waiting: AtomicBool::new(false),
@@ -726,6 +817,11 @@ impl SpeechRecognizer {
         // Serialize all writes through the connection mutex. The socket write
         // timeout bounds how long a single write can hold it, so `stop` can
         // always acquire the writer promptly to send the end signal.
+        //
+        // The ticket is taken before locking (and, being declared first,
+        // dropped after the guard) so the polling reader stops competing for
+        // the socket instead of barging ahead of this thread.
+        let _ticket = self.shared.writer_ticket();
         let mut guard = self.shared.ws.lock().unwrap();
         let ws = match guard.as_mut() {
             Some(ws) => ws,
@@ -1038,13 +1134,13 @@ fn read_loop_inner(
     );
 
     loop {
-        // Give ordinary audio writers a chance after a polling read. For a
-        // pending Stop, the explicit end-signal handoff below is stronger:
-        // this reader waits outside ws until stop() has written the end frame.
-        thread::yield_now();
+        // For a pending Stop, the explicit end-signal handoff is the stronger
+        // guarantee: this reader waits outside ws until stop() has written
+        // the end frame. Ordinary audio writers get the bounded yield below.
         if !shared.wait_for_end_signal_if_stopping() {
             return;
         }
+        shared.yield_to_pending_writers();
         let read_result = {
             let mut guard = shared.ws.lock().unwrap();
             match guard.as_mut() {
@@ -1351,20 +1447,93 @@ mod shared_tests {
     use std::time::Instant;
 
     fn stopping_shared() -> Arc<Shared> {
-        Arc::new(Shared {
-            state: AtomicU8::new(STATE_STOPPING),
-            ws: Mutex::new(None),
-            shutdown: Mutex::new(None),
-            done: (Mutex::new(false), Condvar::new()),
-            terminal_received: AtomicBool::new(false),
-            end_signal_sent: AtomicBool::new(false),
-            handoff_expired: AtomicBool::new(false),
-            handoff_waiting: AtomicBool::new(false),
-            reader_tid: Mutex::new(None),
-            stop_timeout: Mutex::new(DEFAULT_STOP_TIMEOUT),
-            finish_once: Once::new(),
-            voice_id: Mutex::new(String::new()),
-        })
+        let shared = new_shared();
+        shared.state.store(STATE_STOPPING, Ordering::SeqCst);
+        shared
+    }
+
+    /// Runs a stand-in for `read_loop`'s socket handling: yield to pending
+    /// writers, hold the socket for one read poll, then contend again
+    /// immediately. Returns a handle and the flag that stops it.
+    fn spawn_polling_reader(shared: &Arc<Shared>) -> (thread::JoinHandle<()>, Arc<AtomicBool>) {
+        let reader = Arc::clone(shared);
+        let stop = Arc::new(AtomicBool::new(false));
+        let reader_stop = Arc::clone(&stop);
+        let handle = thread::spawn(move || {
+            while !reader_stop.load(Ordering::SeqCst) {
+                reader.yield_to_pending_writers();
+                let _guard = reader.ws.lock().unwrap();
+                thread::sleep(READ_POLL_INTERVAL);
+            }
+        });
+        (handle, stop)
+    }
+
+    /// The reader must not take the socket while a writer has announced
+    /// itself. Deterministic: it asserts the handoff protocol directly rather
+    /// than relying on how fairly the platform's mutex schedules waiters.
+    #[test]
+    fn reader_yields_the_socket_while_a_writer_is_pending() {
+        let shared = new_shared();
+        shared.state.store(STATE_RUNNING, Ordering::SeqCst);
+
+        let ticket = shared.writer_ticket();
+
+        let reader = Arc::clone(&shared);
+        let (tx, rx) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            reader.yield_to_pending_writers();
+            let _guard = reader.ws.lock().unwrap();
+            tx.send(()).unwrap();
+        });
+
+        assert!(
+            rx.recv_timeout(READ_POLL_INTERVAL / 2).is_err(),
+            "reader took the socket while a writer was pending"
+        );
+
+        drop(ticket);
+        rx.recv_timeout(Duration::from_secs(5))
+            .expect("reader should resume once no writer is pending");
+        handle.join().unwrap();
+    }
+
+    /// End-to-end budget for the starvation bug: a writer pacing real-time
+    /// audio (one frame every 40ms) must never wait longer than one in-flight
+    /// read plus one contended round.
+    ///
+    /// Before the handoff this failed on Linux only, where the futex-based
+    /// mutex lets the reader barge ahead of parked waiters (measured: the
+    /// writer acquired the lock 6 times in 5s, worst wait 11.5s); macOS
+    /// pthread mutexes hid it by handing the lock to the waiter.
+    #[test]
+    fn polling_reader_does_not_starve_a_paced_writer() {
+        let shared = new_shared();
+        shared.state.store(STATE_RUNNING, Ordering::SeqCst);
+        let (handle, stop) = spawn_polling_reader(&shared);
+
+        let mut worst = Duration::ZERO;
+        for _ in 0..25 {
+            thread::sleep(Duration::from_millis(40));
+            let began = Instant::now();
+            {
+                // Declaration order matters: the guard is dropped first, so
+                // the socket is free before the ticket touches done.0.
+                let _ticket = shared.writer_ticket();
+                let _guard = shared.ws.lock().unwrap();
+            }
+            worst = worst.max(began.elapsed());
+        }
+
+        stop.store(true, Ordering::SeqCst);
+        handle.join().unwrap();
+
+        // One in-flight read + one contended round, with margin for CI.
+        let budget = READ_POLL_INTERVAL * 4;
+        assert!(
+            worst <= budget,
+            "writer starved by the polling reader: worst wait {worst:?} exceeds {budget:?}"
+        );
     }
 
     fn wait_until_reader_is_parked(shared: &Shared) {

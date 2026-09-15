@@ -169,13 +169,25 @@ sequenceDiagram
 | `result.voice_text_str` | String | 当前结果文本 |
 | `result.word_size` / `word_list` | Integer / Array | 词级（字级）时间戳，需 `word_info != 0` |
 | `result.speaker_segments` | Array | 说话人分段，开启说话人分离后返回 |
-| `result.language` / `language_b47` | String | 识别语言（引擎上报时） |
+| `result.language` | String | 识别语言（引擎上报时） |
 | `result.finish_silence_ms` | Integer | 触发断句的尾部静音时长（ms） |
 | `result.last_token_runtime_ms` | Integer | 末字服务端解码耗时（ms） |
 
-说话人分离开启后，归属通过 `result.speaker_segments[]`（推荐）与 `result.word_list[].speaker_id`（需 `word_info != 0`）返回；`speaker_id` 从 1 开始编号，`-1` 未知。`speaker_segments[]` 含 `speaker_id` / `speaker_name`（模式 3 命中声纹时）/ `start_time` / `end_time` / `text` / `word_start` / `word_end` / `stable_flag`。
-
 ### 一句话识别 /v3/transcribe
+
+```mermaid
+sequenceDiagram
+    participant C as 客户端（v3 SDK）
+    participant S as ASR 服务端
+
+    C->>S: POST /v3/transcribe {"auth":{"sdkappid","usersig","request_id"},"params":{...}}
+    Note right of S: 鉴权（usersig 绑定 request_id）→ 同步识别
+    alt 成功
+        S-->>C: {"code":0,"result":"...","word_list":[...]}
+    else 失败
+        S-->>C: {"code":4xxx/5xxx,"message":"..."}（鉴权失败 4002 也是 HTTP 200）
+    end
+```
 
 `params` 字段：
 
@@ -188,42 +200,135 @@ sequenceDiagram
 | `data` | string | 条件 | base64 音频数据（`source_type=1` 必填） |
 | `data_len` | int | 条件 | 音频数据原始长度（`source_type=1` 必填） |
 | `word_info` | int | 否 | 词级时间：`0` 关 / `1` 开 / `2` 含标点 |
-| `filter_dirty` / `filter_modal` / `filter_punc` | int | 否 | 过滤类 |
+| `filter_dirty` | int | 否 | 脏词过滤：`0` / `1` / `2`(替换 *) |
+| `filter_modal` | int | 否 | 语气词过滤：`0` / `1` / `2` |
+| `filter_punc` | int | 否 | 标点过滤：`0` 不过滤 / `1` 过滤 |
 | `convert_num_mode` | int | 否 | 数字转换：`0` 不转 / `1` 智能 / `3` 数学 |
-| `hotword_id` / `hotword_list` | string | 否 | 热词 |
+| `hotword_id` | string | 否 | 热词表 ID |
 | `customization_id` | string | 否 | 自学习模型 ID |
+| `hotword_list` | string | 否 | 临时热词列表 |
 | `input_sample_rate` | int | 否 | PCM 输入采样率（仅 8000，配 16k 引擎升采样） |
-| `needvad` / `vad_silence_time` | int | 否 | 三态：不传走默认 |
+| `needvad` | int | 否 | 三态：不传走默认，`0` 关 / `1` 开 |
+| `vad_silence_time` | int | 否 | 三态：不传走默认（800），断句静音阈值（ms） |
 | `language` | string | 否 | 指定识别语言，留空自动检测 |
-| `speaker_diarization` / `speaker_number` | int | 否 | 说话人分离 |
+| `speaker_diarization` | int | 否 | 说话人分离：`0` 关 / `1` 聚类 / `3` 声纹角色 |
+| `speaker_number` | int | 否 | 说话人数量提示，`0` 自动 |
 | `context` | object | 否 | 识别上下文（结构同在线） |
 
 **限制**：音频时长 ≤ 60s，文件大小 ≤ 3MB。
 
-响应（`TranscribeResponse`）：`code` / `message` / `request_id` / `result`（识别文本）/ `audio_duration`（ms）/ `language` / `language_b47` / `word_size` / `word_list[]`（含 `word` / `start_time` / `end_time`，ms）。
+响应（`TranscribeResponse`）：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `code` / `message` / `request_id` | int / string / string | 状态码 / 提示 / 请求 ID |
+| `result` | string | 识别结果文本 |
+| `audio_duration` | int | 音频时长（ms） |
+| `language` / `language_b47` | string | 识别语言 |
+| `word_size` / `word_list` | int / array | 词级结果，`word_list[]` 含 `word` / `start_time` / `end_time`（ms） |
 
 ### 录音文件识别 /v3/create_transcription
 
-异步任务：创建返回 `transcription_id`（24 小时有效），再用任务查询接口轮询。请求侧字段（`CreateTranscriptionRequest`）：`engine_model_type` / `channel_num` / `res_text_format` / `source_type` / `url`（≤12h，≤1GB）/ `data`+`data_len`（≤5MB）/ `audio_urls`（分布式录音：`[{index:0,url:"...",label:"..."}]`，须 `source_type=0` 且 `url`/`data` 为空）/ `callback_url` / `speaker_diarization` / `speaker_number` / `voiceprint_ids` / `speaker_roles`（`SpeakerRole{role_name,audio_url}`）/ `hotword_id` / `hotword_list` / `customization_id` / `keyword_lib_id_list` / `replace_text_id` / `convert_num_mode` / `filter_dirty` / `filter_punc` / `filter_modal` / `sentence_max_length` / `extra` / `vad_silence_ms` / `vad_level` / `noise_threshold`（`0` 是合法取值，用 `Option::None` 区分未设置）/ `language` / `context`。
+异步任务：创建返回 `transcription_id`（24 小时有效），再用任务查询接口轮询。
+
+```mermaid
+sequenceDiagram
+    participant C as 客户端（v3 SDK）
+    participant S as ASR 服务端
+
+    C->>S: POST /v3/create_transcription {"auth","params"}
+    S-->>C: {"code":0,"transcription_id":"tid-..."}
+
+    loop 轮询（SDK wait_for_result 默认 1s 间隔）
+        C->>S: POST /v3/describe_transcription {"auth","params":{"transcription_id":"tid-..."}}
+        S-->>C: {"status":0/1}（排队 / 处理中）
+    end
+    S-->>C: {"status":2,"result":"...","result_detail":[...]}（成功）或 {"status":3,"error_msg":"..."}
+
+    Note over S: 若创建时配置了 callback_url，任务完成后服务端会主动 POST 回调（见下表）
+```
+
+`params` 字段：
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `engine_model_type` | string | 是 | 引擎模型，必填；示例取 `bigmodel`（推荐，配 `language`） |
+| `channel_num` | int | 是 | 声道数：`1` 单声道；`2` 双声道（按 `channel_id` 出句，勿与分离同开） |
+| `res_text_format` | int | 是 | 结果格式：`0` 基础 / `1` 含词级时间 / `2` 含标点时间 |
+| `source_type` | int | 是 | `0` URL 上传 / `1` 本地数据（base64） |
+| `url` | string | 条件 | 音频 URL（`source_type=0`，时长 ≤12h，大小 ≤1GB） |
+| `data` / `data_len` | string / int | 条件 | base64 音频与原始长度（`source_type=1`，≤5MB） |
+| `audio_urls` | array | 否 | 分布式录音：`[{"index":0,"url":"...","label":"..."}]` |
+| `callback_url` | string | 否 | 结果回调 URL（任务完成后 POST） |
+| `speaker_diarization` | int | 否 | 说话人分离：`0` 关 / `1` 聚类 / `3` 声纹角色 |
+| `speaker_number` | int | 否 | 说话人数量提示 |
+| `voiceprint_ids` | array | 否 | 已注册声纹 ID（仅模式 3） |
+| `speaker_roles` | array | 否 | 临时声纹 `[{"audio_url","role_name"}]`（仅模式 3） |
+| `hotword_id` | string | 否 | 热词表 ID |
+| `customization_id` | string | 否 | 自学习模型 ID |
+| `hotword_list` | string | 否 | 临时热词列表 |
+| `keyword_lib_id_list` | array | 否 | 关键词库 ID 列表 |
+| `replace_text_id` | string | 否 | 替换词表 ID |
+| `convert_num_mode` | int | 否 | 数字转换 |
+| `filter_dirty` / `filter_punc` / `filter_modal` | int | 否 | 过滤类 |
+| `sentence_max_length` | int | 否 | 单句最大长度 |
+| `extra` | string | 否 | 引擎扩展串 |
+| `vad_silence_ms` | int | 否 | 静音断句阈值（ms） |
+| `vad_level` | int | 否 | VAD 场景档：`0` 高召回 / `1` 远场过滤 |
+| `noise_threshold` | float | 否 | 噪声阈值 `0`~`4`（`0` 是合法取值，用 `Option::None` 区分未设置） |
+| `language` | string | 否 | 指定识别语言，留空自动检测 |
+| `context` | object | 否 | 识别上下文（结构同在线） |
 
 响应：`{"code":0,"message":"success","request_id":"...","transcription_id":"..."}`。
 
-配置了 `callback_url` 时，任务完成后服务端以 `application/x-www-form-urlencoded` POST 回调，字段：`code` / `message` / `request_id`（创建时原值）/ `transcription_id` / `text` / `audio_duration`（秒）/ `audio_url` / `result_detail`（JSON 字符串）。
+`callback_url` 回调（`application/x-www-form-urlencoded`，snake_case 字段）：
+
+| 字段 | 说明 |
+|------|------|
+| `code` / `message` | `0` 成功 / 失败原因 |
+| `request_id` | 创建时 `auth.request_id` 原值 |
+| `transcription_id` | 任务 ID |
+| `text` / `audio_duration` | 成功时：全文 / 时长（秒） |
+| `audio_url` | 音频地址（存在且允许回传时） |
+| `result_detail` | JSON 字符串，分句结构同任务查询响应 |
 
 ### 任务查询 /v3/describe_transcription
 
-`params` 仅一个字段：`transcription_id`（与 v1 `RecTaskId` 不通用）。
+`params` 仅一个字段：`transcription_id`（创建任务返回的 ID；与 v1 `RecTaskId` 不通用）。
 
-响应（`TranscriptionStatus`）：`code` / `message` / `request_id` / `transcription_id` / `status`（`0` 排队 / `1` 处理中 / `2` 成功 / `3` 失败）/ `status_str` / `progress` / `audio_duration`（秒）/ `result` / `result_detail[]` / `error_msg`。
+响应（`TranscriptionStatus`）：
 
-`result_detail[]`（`SentenceDetail`）：`final_sentence` / `slice_sentence` / `written_text` / `start_ms` / `end_ms` / `words_num` / `words[]`（`word` / `start_time` / `end_time`）/ `speech_speed` / `speaker_id` / `channel_id`（双声道：1=左、2=右）/ `speaker_role_name` / `silence_time` / `language` / `language_b47`。
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `code` / `message` / `request_id` | — | 状态码 / 提示 / 请求 ID |
+| `transcription_id` | string | 任务 ID |
+| `status` / `status_str` | int / string | `0` 排队 / `1` 处理中 / `2` 成功 / `3` 失败 |
+| `progress` | int | 处理进度（0-100） |
+| `audio_duration` | float | 音频时长（秒） |
+| `result` | string | 完整识别文本 |
+| `result_detail` | array | 分句结果（见下） |
+| `error_msg` | string | 失败原因 |
+
+`result_detail[]`（`SentenceDetail`）：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `final_sentence` / `slice_sentence` / `written_text` | string | 终稿句 / 分片句 / 书面文本 |
+| `start_ms` / `end_ms` | int | 句起止时间（ms） |
+| `words_num` / `words` | int / array | 词级结果；`words[]` 含 `word` / `start_time` / `end_time` |
+| `speech_speed` | float | 语速 |
+| `speaker_id` | int | 说话人编号（开启分离后返回） |
+| `channel_id` | int | 双声道场景声道编号：1=左、2=右 |
+| `speaker_role_name` | string | 角色名（模式 3 命中声纹时返回） |
+| `silence_time` | int | 句前静音（ms） |
+| `language` / `language_b47` | string | 该句识别语言 |
 
 ### 错误码
 
 | code | 说明 | 常见触发 |
 |------|------|----------|
 | `4000` | 音频发送过多 | 1 秒内最多发送 3 秒音频 |
-| `4001` | 参数不合法 | params 校验失败 / `EnableV3Route` 未开启 / `voice_id` 冲突 |
+| `4001` | 参数不合法 | params 校验失败 / `voice_id` 冲突 |
 | `4002` | 鉴权失败 | `auth` 缺失 / `usersig` 验签不通过 / 查询他人任务 |
 | `4003` | 服务未开通 | 调度拒绝 |
 | `4006` | 并发超限 | 账号并发或连接数超限 |
@@ -232,7 +337,76 @@ sequenceDiagram
 | `4010` | 未知文本消息 | 首帧 JSON 非法 / `type` 非 `start` |
 | `5000`/`5001`/`5002` | 服务端内部错误 | 无可用机器 / 调度失败，可重试 |
 
-离线接口的 HTTP 状态码与 `code` 组合：参数错误 `400`、鉴权失败 **`200`**、灰度未开 `404`、并发超限 `429`、body 过大 `413`、调度失败 `503`——**一律以 body 的 `code` 为准**。
+离线接口的 HTTP 状态码与 `code` 组合：参数错误 `400`、鉴权失败 **`200`**、并发超限 `429`、body 过大 `413`、调度失败 `503`——**一律以 body 的 `code` 为准**。
+
+### 说话人分离（实时）
+
+开启 `speaker_diarization` 后，说话人归属通过两个入口返回：
+
+- `result.speaker_segments[]`：**推荐入口**。一个 `result` 可能包含多个说话人，句子级归属天然有歧义，因此协议按说话人切段返回。`len(speaker_segments) == 1` 即为单说话人句。
+- `result.word_list[].speaker_id`：字级归属，需同时设置 `word_info != 0`。
+
+`speaker_id` 语义：会话内有效，从 `1` 开始编号，`-1` 表示未知，`0` 为保留值。
+
+`speaker_segments[]` 字段：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `speaker_id` | Integer | 说话人编号 |
+| `speaker_name` | String | 角色名，仅 `speaker_diarization=3` 命中注册声纹时返回，等于请求侧 `RoleName` |
+| `start_time` / `end_time` | Integer | 该分段起止时间（ms） |
+| `text` | String | 该分段文本 |
+| `word_start` / `word_end` | Integer | 对应 `word_list` 的闭区间下标，即 `word_list[word_start:word_end+1]`；`word_info=0` 时不返回 |
+| `stable_flag` | Integer | 该分段是否稳定：`1` 稳定，`0` 非稳定 |
+
+Rust 用法示例：
+
+```rust
+use std::sync::Arc;
+
+use trtc_asr_sdk::asr::v3::{
+    SpeakerRole, SpeechRecognizer, SPEAKER_DIARIZATION_CLUSTER, SPEAKER_DIARIZATION_VOICEPRINT,
+};
+use trtc_asr_sdk::asr::{SpeechRecognitionListener, SpeechRecognitionResponse};
+
+let mut recognizer = SpeechRecognizer::new(credential, "bigmodel", Arc::new(Printer));
+recognizer.set_language("zh");                                    // bigmodel 建议显式指定语种
+recognizer.set_word_info(1);                                      // 需要字级说话人时开启
+recognizer.set_speaker_diarization(SPEAKER_DIARIZATION_CLUSTER);  // 1：匿名聚类
+
+// 声纹角色认证（返回角色名）：
+// recognizer.set_speaker_diarization(SPEAKER_DIARIZATION_VOICEPRINT); // 3
+// recognizer.set_speaker_roles(vec![SpeakerRole {
+//     role_name: "teacher".into(),
+//     audio_url: "https://example.com/teacher.wav".into(),
+// }]);
+// recognizer.set_voiceprint_ids(vec!["vp-1".into()]); // 已注册声纹
+// recognizer.set_speaker_number(2);                   // 0 = 自动检测；两种分离模式都生效
+
+// 回调里读取：
+impl SpeechRecognitionListener for Printer {
+    fn on_sentence_end(&self, resp: &SpeechRecognitionResponse) {
+        for seg in &resp.result.speaker_segments {
+            let name = if seg.speaker_name.is_empty() {
+                format!("spk{}", seg.speaker_id)
+            } else {
+                seg.speaker_name.clone()
+            };
+            println!("[{name}] {}", seg.text);
+        }
+    }
+}
+```
+
+### VAD 调优（noise_threshold / vad_level）
+
+| 方法 | 取值 | 说明 |
+|------|------|------|
+| `set_vad_level(level)` | `0` / `1` | `0` 高召回，`1` 远场过滤（服务端默认） |
+| `set_noise_threshold(v)` | `0.0` - `4.0` | 噪声抑制微调，值越大抑制越强、召回越低；设置后覆盖 `vad_level` 档位 |
+| `set_vad_silence_time(ms)` | 240 - 2000 | 静音断句阈值 |
+
+两者都是三态语义：**只有显式调用 setter 才会下发**，因此显式传 `0` 与「不配置」可以区分（服务端 `vad_level` 默认是 `1`）。超出范围会在 `start()` 阶段本地报错，不会浪费一次连接。
 
 ## 安装
 
@@ -426,20 +600,32 @@ trtc-asr-sdk-rust/
 
 ### v3 和 v2 怎么选？
 
-- **新接入**：推荐 v3（`trtc_asr_sdk::asr::v3` 模块）——只需 SDKAppID + SecretKey，协议更干净（auth/params 分块、扁平响应、数字错误码），`start()` 同步返回鉴权/参数错误。前提是服务端已为您的 SDKAppID 开启 `EnableV3Route` 灰度。
-- **存量**：v2（`trtc_asr_sdk::asr` 顶层导出）继续全量可用，无需任何改动。
+- **新接入**：推荐 v3（`trtc_asr_sdk::asr::v3` 模块）——只需 SDKAppID + SecretKey，协议更干净（auth/params 分块、扁平响应、数字错误码），`start()` 同步返回鉴权/参数错误。
+- **存量**：v2（`trtc_asr_sdk::asr` 顶层导出）继续全量可用，无需任何改动，文档见 [docs/v2_protocol.md](./docs/v2_protocol.md)。
 
-### v3 报 4001 / 404 是什么问题？
+### 错误码怎么看？
 
-最常见原因是服务端 `EnableV3Route` 灰度未为您的 SDKAppID 开启：在线会得到 `4001 v3 interface not enabled`，离线会得到 HTTP 404。请联系服务团队开启。
+SDK 本地错误码是 10xx（如 `1001` 参数错误）；服务端返回的是 4xxx/5xxx（如 `4002` 鉴权失败）。`AsrError.code` 的值域不冲突，可直接按区间判断来源。
 
 ### v1 的任务 ID 能用 v3 接口查询吗？
 
 不能。v1 `RecTaskId` 与 v3 `transcription_id` 是两套任务空间，互不通用。
 
-### 错误码怎么看？
+### 旧版 v2 / v1 协议在哪？
 
-SDK 本地错误码是 10xx（如 `1001` 参数错误）；服务端返回的是 4xxx/5xxx（如 `4002` 鉴权失败）。`AsrError.code` 的值域不冲突，可直接按区间判断来源。
+`trtc_asr_sdk::asr` 顶层导出的 v2 / v1 客户端继续维护，文档见 [docs/v2_protocol.md](./docs/v2_protocol.md)。v2 与 v3 的下行消息结构一致，
+listener 用法相同，切换协议版本只需改 import 与构造方式。
+
+### UserSig 是什么？
+
+UserSig 是基于 SDKAppID 和 SDK 密钥计算的签名，用于 TRTC 服务鉴权。SDK 会自动生成（identifier 在线绑定
+`voice_id`、离线绑定 `request_id`），无需手动计算。详见[鉴权文档](https://cloud.tencent.com/document/product/647/17275)。
+
+### 支持哪些音频格式？
+
+- **实时语音识别**：支持 PCM 格式（`voice_format=1`），建议 16kHz、16bit、单声道
+- **一句话识别**：支持 wav、pcm、ogg-opus、mp3、m4a，音频时长 ≤ 60s，文件 ≤ 3MB
+- **录音文件识别**：支持 wav、ogg-opus、mp3、m4a，本地文件 ≤ 5MB，URL ≤ 1GB / ≤ 12h
 
 ## License
 

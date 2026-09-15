@@ -12,7 +12,7 @@ This SDK targets the **v3 protocol**: only `SdkAppID` + `SecretKey` are required
 
 ## Prerequisites
 
-Two credentials are needed: `SdkAppID` and `SecretKey`. The domestic and international sites use different account systems — follow the official quick start for your site to register, create an application and activate the service:
+Two credentials are needed: `SdkAppID` and `SecretKey` (on v3 `SdkAppID` is the only customer dimension — the Tencent Cloud `AppID` is **no longer needed**). The domestic and international sites use different account systems — follow the official quick start for your site to register, create an application and activate the service:
 
 - **China site**: [Quick Start](https://xai.cloud-rtc.com/#gettingStarted) — register a Tencent Cloud account and complete real-name verification → create an application in the [TRTC console](https://console.cloud.tencent.com/trtc/app) → activate "AI Speech Recognition" (free trial available)
 - **International site**: [Quick Start](https://xai-intl.cloud-rtc.com/#gettingStarted) — register at [trtc.io](https://www.trtc.io) (a Tencentcloud account is created automatically, no real-name verification) → create an application at [console.trtc.io](https://console.trtc.io) → activate "AI Speech Recognition" (RTC Engine Lite or above only; Free Trial is not supported)
@@ -114,6 +114,7 @@ sequenceDiagram
     S-->>C: result.slice_type=0 (sentence begin)
     S-->>C: result.slice_type=1 (interim result) xN
     S-->>C: result.slice_type=2 (final sentence)
+    Note right of S: with several sentences, index increments and 0→1→2 repeats
 
     C->>S: {"type":"end"}
     S-->>C: {"final":1} (stream finished)
@@ -418,6 +419,8 @@ Both are tri-state: **only an explicit setter call is sent on the wire**, so an 
 trtc-asr-sdk = "1"
 ```
 
+**Requires**: Rust 2021 edition (stable)
+
 ## Quick start
 
 ### Realtime recognition
@@ -511,7 +514,7 @@ fn main() {
 
 | Field | China site | International site | Notes |
 |-------|-----------|--------------------|-------|
-| `SdkAppID` | [TRTC console](https://console.cloud.tencent.com/trtc/app) > Application management | [console.trtc.io](https://console.trtc.io) > application details | TRTC application ID |
+| `SdkAppID` | [TRTC console](https://console.cloud.tencent.com/trtc/app) > Application management | [console.trtc.io](https://console.trtc.io) > application details | TRTC application ID; the only customer dimension on v3 |
 | `SecretKey` | [TRTC console](https://console.cloud.tencent.com/trtc/app) > overview > SDK key | [console.trtc.io](https://console.trtc.io) > application details | Used to derive UserSig; never transmitted |
 
 > The Tencent Cloud `AppID` needed by the v2 client is not required on v3.
@@ -523,13 +526,13 @@ Realtime recognition (`v3::SpeechRecognizer`); setters mirror the v2 client:
 | Method | Description | Default |
 |--------|-------------|---------|
 | `set_voice_format(f)` | Audio format | 1 (PCM) |
-| `set_need_vad(v)` | Enable VAD | 1 (on) |
-| `set_convert_num_mode(m)` | Number conversion | 1 (smart) |
-| `set_hotword_id(id)` / `set_hotword_list(list)` | Hotwords | - |
+| `set_need_vad(v)` | Enable VAD (an explicit `0` really turns it off) | 1 (on) |
+| `set_convert_num_mode(m)` | Number conversion: `0` off / `1` smart / `3` math (an explicit `0` is sent) | 1 (smart) |
+| `set_hotword_id(id)` / `set_hotword_list(list)` | Hotwords: table ID (per SdkAppID) / inline `word\|weight,...` | - |
 | `set_filter_dirty(m)` / `set_filter_modal(m)` / `set_filter_punc(m)` | Filters | 0 (off) |
 | `set_filter_empty_result(m)` | Deliver empty results | 1 (skip) |
-| `set_word_info(m)` | Word/character timings | 0 (off) |
-| `set_word_with_space(m)` | Space-separated English words | 0 (off) |
+| `set_word_info(m)` | Word/character timings: `0` off / `1` on / `2` with punctuation / `100` caption | 0 (off) |
+| `set_word_with_space(m)` | Space-separated English word output | 0 (off) |
 | `set_vad_silence_time(ms)` | VAD silence threshold (240-2000) | 800ms |
 | `set_vad_level(level)` | VAD profile: 0 high recall / 1 far-field | 1 |
 | `set_noise_threshold(v)` | VAD noise tuning (0.0-4.0), overrides the profile | unset |
@@ -537,11 +540,13 @@ Realtime recognition (`v3::SpeechRecognizer`); setters mirror the v2 client:
 | `set_input_sample_rate(r)` | PCM input rate, only 8000 | - |
 | `set_speaker_diarization(m)` | Diarization: 0 off / 1 cluster / 3 voiceprint | 0 (off) |
 | `set_speaker_number(n)` | Speaker count hint | 0 (auto) |
-| `set_speaker_roles(roles)` | Temporary voiceprints (mode 3) | - |
-| `set_voiceprint_ids(ids)` | Enrolled voiceprint IDs (mode 3) | - |
-| `set_language(lang)` | Language hint | auto |
-| `set_voice_id(id)` | Custom voice_id | auto UUID |
-| `set_context(ctx)` | Recognition context | - |
+| `set_speaker_roles(roles)` | Temporary voiceprints (mode 3 only) | - |
+| `set_voiceprint_ids(ids)` | Enrolled voiceprint IDs (mode 3 only) | - |
+| `set_language(lang)` | Language hint | auto detect |
+| `set_voice_id(id)` | Custom voice_id (UserSig is bound to it) | auto UUID |
+| `set_context(ctx)` | Recognition context (`text` / `terms` / `general`) | - |
+
+> v3 realtime does not carry the v2 `customization_id` / `replace_text_id`.
 
 ## Engine models
 
@@ -593,7 +598,8 @@ trtc-asr-sdk-rust/
 
 **v3 or v2?** For new integrations use v3 (`trtc_asr_sdk::asr::v3`): only SdkAppID + SecretKey, a cleaner protocol, and `start()` returns auth/parameter errors synchronously. Existing v2 users can stay as they are — see [docs/v2_protocol.md](./docs/v2_protocol.md).
 
-**How do I read error codes?** SDK-local codes are 10xx; server codes are 4xxx/5xxx. `AsrError.code` ranges do not overlap.
+**How do I read error codes?** v3 uses numeric codes throughout: `4001` invalid parameter, `4002` authentication failed, `4006` concurrency limit, `4008` timeout, `5000` server error.
+The error you get is `AsrError`; its `code` is the server code (SDK-local errors use the 10xx range, e.g. `1001` invalid parameter, `1002` connection failed). Note that an HTTP authentication failure is also HTTP 200 — always trust the `code` in the body (the SDK already does).
 
 **Can I query a v1 task ID through v3?** No. The v1 `RecTaskId` and the v3 `transcription_id` are separate task spaces.
 

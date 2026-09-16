@@ -88,8 +88,6 @@
   - `needvad`/`convert_num_mode` 显式传 0 会真正下发（v2 query 传参会吞掉 0 值）；说话人分离的 `speaker_roles` 元素序列化为 snake_case（`role_name`/`audio_url`），声纹 ID 列表为 `voiceprint_ids`
   - v3 新增能力：`word_with_space`、`context`（识别上下文 text/terms/general）；录音文件支持 `audio_urls` 分布式录音
   - 下行消息结构与 v2 完全一致，listener trait（`asr::SpeechRecognitionListener`）两版共用
-  - 使用前提：服务端已为对应 SDKAppID 开启 `EnableV3Route` 灰度
-  - 注：协议中服务端内部的 `business` 灰度字段不属于公开 API，SDK 不暴露、不发送
 - 新增 `examples/v3_realtime_asr.rs` / `v3_sentence_asr.rs` / `v3_file_asr.rs` 示例
 - README 改为只承载 v3 协议文档；v2 / v1 协议与客户端说明移至 `docs/v2_protocol.md`
 

@@ -188,9 +188,7 @@ fn validate_audio_urls(
     Ok(())
 }
 
-/// Builds the v3 auth block (sdkappid / usersig / request_id). The
-/// protocol's internal "business" field (gray/routing dimension managed by
-/// the service side) is not part of the public SDK surface and is never sent.
+/// Builds the v3 auth block (sdkappid / usersig / request_id).
 fn auth_block(credential: &Credential, request_id: &str) -> Result<serde_json::Value> {
     let user_sig = if credential.user_sig.is_empty() {
         usersig::gen_user_sig(

@@ -5,9 +5,6 @@
 //!   TRTC_ASR_SDK_APP_ID, TRTC_ASR_SECRET_KEY
 //! (v3 does not need the Tencent Cloud APPID.)
 //!
-//! Prerequisite: the server has enabled the EnableV3Route gray switch for
-//! your SDKAppID, otherwise requests fail with 404/4001.
-//!
 //! Usage:
 //!   cargo run --example v3_file_asr -- local.wav
 //!   cargo run --example v3_file_asr -- -u https://example.com/audio.wav

@@ -6,9 +6,6 @@
 //!   TRTC_ASR_SDK_APP_ID, TRTC_ASR_SECRET_KEY
 //! (v3 does not need the Tencent Cloud APPID.)
 //!
-//! Prerequisite: the server has enabled the EnableV3Route gray switch for
-//! your SDKAppID, otherwise start() fails with 4001.
-//!
 //! Usage: cargo run --example v3_realtime_asr -- <audio.pcm> [engine]
 
 use std::env;

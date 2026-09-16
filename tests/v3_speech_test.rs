@@ -133,8 +133,9 @@ fn start_frame_wire_format() {
     let auth = &frame["auth"];
     assert_eq!(auth["sdkappid"], "1400000000");
     assert!(!auth["usersig"].as_str().unwrap_or("").is_empty());
-    // business is a server-side internal gray dimension; never sent.
-    assert!(auth.get("business").is_none());
+    let mut keys: Vec<_> = auth.as_object().unwrap().keys().cloned().collect();
+    keys.sort();
+    assert_eq!(keys, ["sdkappid", "usersig"]);
 
     let params = &frame["params"];
     assert_eq!(params["voice_id"], "voice-1");
@@ -187,7 +188,7 @@ fn start_auth_error_is_synchronous() {
 }
 
 #[test]
-fn start_gray_disabled_error_is_synchronous() {
+fn start_4001_error_is_synchronous() {
     let server = MockWsServer::start(|mut ws| {
         if let Ok(Message::Text(_)) = ws.read() {
             let _ = ws.send(Message::text(

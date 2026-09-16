@@ -40,8 +40,9 @@ fn transcribe_wire_format() {
         assert_eq!(auth["sdkappid"], "1400000000");
         assert!(!auth["usersig"].as_str().unwrap_or("").is_empty());
         assert!(!auth["request_id"].as_str().unwrap_or("").is_empty());
-        // business is a server-side internal gray dimension; never sent.
-        assert!(auth.get("business").is_none());
+        let mut keys: Vec<_> = auth.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, ["request_id", "sdkappid", "usersig"]);
 
         let params = &body["params"];
         assert_eq!(params["engine_model_type"], "16k_zh_en");

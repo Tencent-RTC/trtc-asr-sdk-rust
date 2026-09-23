@@ -7,6 +7,40 @@
 
 ## [未发布]
 
+### 新增
+
+- 实时说话人分离支持**断点续传**（`speaker context`）：
+  - **v2 实时接口同步支持**：URL query 参数 `enable_speaker_context` / `speaker_context_id`
+    （`set_enable_speaker_context` / `set_speaker_context_id`），首响应 `speaker_continue` 经
+    `SpeechRecognizer::speaker_continue()` 读取（v2 的 `on_recognition_start` 早于服务端首响应，
+    回调里拿不到该字段）；
+  - `set_enable_speaker_context(mode)`：`1` 同步（首响应等快照恢复完成并回报
+    `continue_status`）/ `2` 异步（首响应只返回 `speaker_context_id`，
+    恢复在后台进行）；`0` 或不调用为关闭（默认）。
+  - `set_speaker_context_id(id)`：传回上次首响应返回的 `speaker_context_id`，
+    使新连接继续使用断点前的说话人编号；未带 / 过期 / 非法 ID 按新会话处理。
+  - 首响应新增 `speaker_continue`，解出为 `SpeakerContinue`
+    （`continue_status`: `fresh`/`resumed`/`degraded`/`disabled` 与
+    `speaker_context_id`）：可通过新增的 `SpeechRecognizer::speaker_continue()`
+    读取，也会随 `on_recognition_start` 回调的响应一起下发
+    （`SpeechRecognitionResponse::speaker_continue`）；常量
+    `SPEAKER_CONTEXT_*` / `CONTINUE_STATUS_*` 从 `asr::v3` 与 `asr` 导出。
+  - v3：同步模式携带 `speaker_context_id` 时，`start()` 会等快照加载完成再返回，
+    该路径的首响应等待上限由 5s 放宽到 15s；首次签发、异步模式以及未开启续传仍是 5s。
+    v2 的 `start()` 在 WebSocket 建连后即返回，没有这段等待；同步续传请等 getter
+    拿到首响应再发送音频。
+  - 两个参数需与 `speaker_diarization=1/3` 同开，否则 `start()` 本地报错
+    （`1001`），不浪费连接。
+  - 示例 `examples/v3_realtime_asr.rs` 新增第 4/5 个参数（断点续传模式与
+    `speaker_context_id`）；中英文 README 新增
+    「说话人分离断点续传」章节（含重连流程与字段表）。
+
+### 文档
+
+- 修正 README（中/英）：v3 实时 `voice_id` 与活跃流重复时服务端**不会**返回
+  `4001`（canary 实测：重复 voice_id 的各连接独立识别、互不影响），错误码表
+  4001 行不再标注 "voice_id 冲突"，改为提示客户端自行保证 `voice_id` 唯一。
+
 ## [1.2.5] - 2026-09-16
 
 ### 文档

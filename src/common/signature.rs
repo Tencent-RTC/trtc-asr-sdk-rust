@@ -18,6 +18,12 @@ pub const SPEAKER_DIARIZATION_CLUSTER: i32 = 1;
 /// voiceprint IDs so recognized speakers carry their role name.
 pub const SPEAKER_DIARIZATION_VOICEPRINT: i32 = 3;
 
+/// Speaker context ("断点续传") modes for the `enable_speaker_context`
+/// parameter.
+pub const SPEAKER_CONTEXT_OFF: i32 = 0;
+pub const SPEAKER_CONTEXT_SYNC: i32 = 1;
+pub const SPEAKER_CONTEXT_ASYNC: i32 = 2;
+
 /// A temporary voiceprint enrollment entry used with `speaker_diarization=3`.
 /// `role_name` is echoed back by the server as `speaker_name` on the matched
 /// words / speaker segments.
@@ -95,6 +101,16 @@ pub struct SignatureParams {
     /// Pre-registered voiceprint IDs, serialized into the `voiceprintids`
     /// JSON array. Only sent when diarization is 3.
     pub voiceprint_ids: Vec<String>,
+
+    /// Makes the diarization session resumable ("断点续传"): 0 = off
+    /// (default), 1 = report the restore status on the first response,
+    /// 2 = answer with the id only. Requires diarization 1 or 3.
+    pub enable_speaker_context: i32,
+
+    /// Carries the id issued by a previous session. Only sent together with
+    /// `enable_speaker_context`; an expired or unknown id simply starts a new
+    /// session instead of failing.
+    pub speaker_context_id: String,
 }
 
 impl SignatureParams {
@@ -135,6 +151,8 @@ impl SignatureParams {
             vad_level: None,
             noise_threshold: None,
             speaker_diarization: 0,
+            enable_speaker_context: 0,
+            speaker_context_id: String::new(),
             speaker_number: 0,
             speaker_roles: Vec::new(),
             voiceprint_ids: Vec::new(),
@@ -252,6 +270,18 @@ impl SignatureParams {
                 m.insert(
                     "speaker_number".to_string(),
                     self.speaker_number.to_string(),
+                );
+            }
+        }
+        if self.enable_speaker_context != 0 {
+            m.insert(
+                "enable_speaker_context".to_string(),
+                self.enable_speaker_context.to_string(),
+            );
+            if !self.speaker_context_id.is_empty() {
+                m.insert(
+                    "speaker_context_id".to_string(),
+                    self.speaker_context_id.clone(),
                 );
             }
         }

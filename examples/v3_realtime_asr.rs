@@ -6,7 +6,12 @@
 //!   TRTC_ASR_SDK_APP_ID, TRTC_ASR_SECRET_KEY
 //! (v3 does not need the Tencent Cloud APPID.)
 //!
-//! Usage: cargo run --example v3_realtime_asr -- <audio.pcm> [engine]
+//! Usage: cargo run --example v3_realtime_asr -- <audio.pcm> [engine] [lang] [speaker-context] [speaker-context-id]
+//!
+//! Speaker diarization can be made resumable across connections
+//! ("断点续传"): keep the printed speaker_context_id and pass it back on the
+//! next connection, e.g. `... -- test.pcm bigmodel zh 1` then
+//! `... -- test.pcm bigmodel zh 1 <speaker_context_id>`.
 
 use std::env;
 use std::fs::File;
@@ -14,7 +19,9 @@ use std::io::Read;
 use std::sync::Arc;
 use std::time::Duration;
 
-use trtc_asr_sdk::asr::v3::{new_credential, SpeechRecognizer};
+use trtc_asr_sdk::asr::v3::{
+    new_credential, SpeechRecognizer, SPEAKER_DIARIZATION_CLUSTER,
+};
 use trtc_asr_sdk::asr::{SpeechRecognitionListener, SpeechRecognitionResponse};
 use trtc_asr_sdk::common::AsrError;
 
@@ -23,6 +30,12 @@ struct Printer;
 impl SpeechRecognitionListener for Printer {
     fn on_recognition_start(&self, resp: &SpeechRecognitionResponse) {
         println!("[start] voice_id={}", resp.voice_id);
+        if let Some(sc) = resp.speaker_continue.as_ref() {
+            println!(
+                "speaker context: status=\"{}\" id={}",
+                sc.continue_status, sc.speaker_context_id
+            );
+        }
     }
     fn on_sentence_begin(&self, resp: &SpeechRecognitionResponse) {
         println!("[begin] index={}", resp.result.index);
@@ -38,6 +51,14 @@ impl SpeechRecognitionListener for Printer {
             resp.result.start_time,
             resp.result.end_time
         );
+        for seg in &resp.result.speaker_segments {
+            let label = if seg.speaker_name.is_empty() {
+                format!("spk{}", seg.speaker_id)
+            } else {
+                seg.speaker_name.clone()
+            };
+            println!("  [{label}] {} ({}-{} ms)", seg.text, seg.start_time, seg.end_time);
+        }
     }
     fn on_recognition_complete(&self, _resp: &SpeechRecognitionResponse) {
         println!("[complete]");
@@ -73,16 +94,47 @@ fn main() {
         lang_arg
     };
 
+    // arg[3]: resumable speaker diarization (0 off / 1 sync / 2 async);
+    // arg[4]: the speaker_context_id printed by an earlier run.
+    let speaker_context: i32 = args.next().unwrap_or_default().parse().unwrap_or(0);
+    let speaker_context_id = args.next().unwrap_or_default();
+
     // v3 credentials need only SdkAppID + SecretKey (no Tencent Cloud APPID).
     let credential = new_credential(sdk_app_id, secret_key);
     // start/write/stop take &self (the params live in a RefCell), so no `mut`
     // is needed unless a setter such as set_language is called.
     let mut recognizer = SpeechRecognizer::new(credential, engine, Arc::new(Printer));
     recognizer.set_language(lang);
+    // 调试/抓包：TRTC_ASR_WS_ENDPOINT 可把连接指到本地代理（如 ws://127.0.0.1:8899）。
+    if let Ok(endpoint) = env::var("TRTC_ASR_WS_ENDPOINT") {
+        if !endpoint.is_empty() {
+            recognizer.set_endpoint(endpoint);
+        }
+    }
+    // Speaker-context persistence requires speaker diarization; the SDK
+    // rejects the combination locally otherwise.
+    if speaker_context != 0 {
+        recognizer.set_speaker_diarization(SPEAKER_DIARIZATION_CLUSTER);
+        recognizer.set_enable_speaker_context(speaker_context);
+    }
+    if !speaker_context_id.is_empty() {
+        recognizer.set_speaker_context_id(speaker_context_id);
+    }
 
     // start() waits synchronously for the server's ack: authentication (4002)
-    // and gray-switch (4001) errors are returned here, not via on_fail.
+    // and gray-switch (4001) errors are returned here, not via on_fail. While
+    // resuming a speaker context the ack arrives once the server has applied
+    // the stored snapshot.
     recognizer.start().expect("start failed");
+
+    // The handshake result is also available without a callback. Persist the
+    // id: passing it back keeps speaker ids stable across connections.
+    if let Some(sc) = recognizer.speaker_continue() {
+        println!(
+            "speaker context id: {} (status: \"{}\") — reuse it as the 5th argument",
+            sc.speaker_context_id, sc.continue_status
+        );
+    }
 
     let mut file = File::open(&path).expect("open audio file");
     // 200ms of 16kHz 16bit mono PCM. The server rate-limits to at most 3s of

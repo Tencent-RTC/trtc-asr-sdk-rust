@@ -16,7 +16,13 @@ pub use sentence_recognizer::{
     SENTENCE_ENDPOINT, SOURCE_TYPE_DATA, SOURCE_TYPE_URL,
 };
 pub use speech_recognizer::{SpeechRecognitionListener, SpeechRecognizer, ENDPOINT};
-pub use types::{RecognitionResult, SpeakerSegment, SpeechRecognitionResponse, WordInfo};
+pub use types::{
+    RecognitionResult, SpeakerContinue, SpeakerSegment, SpeechRecognitionResponse, WordInfo,
+};
+pub use v3::{
+    CONTINUE_STATUS_DEGRADED, CONTINUE_STATUS_DISABLED, CONTINUE_STATUS_FRESH,
+    CONTINUE_STATUS_RESUMED, SPEAKER_CONTEXT_ASYNC, SPEAKER_CONTEXT_OFF, SPEAKER_CONTEXT_SYNC,
+};
 
 pub use crate::common::{
     SPEAKER_DIARIZATION_CLUSTER, SPEAKER_DIARIZATION_OFF, SPEAKER_DIARIZATION_VOICEPRINT,

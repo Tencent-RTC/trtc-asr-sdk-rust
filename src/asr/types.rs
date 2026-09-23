@@ -18,6 +18,42 @@ pub struct SpeechRecognitionResponse {
     pub final_flag: i32,
     #[serde(default)]
     pub result: RecognitionResult,
+
+    /// Speaker-context result of the first response, present only when the
+    /// session enabled the speaker context (v3
+    /// [`SpeechRecognizer::set_enable_speaker_context`]); it also reaches
+    /// `on_recognition_start`.
+    ///
+    /// [`SpeechRecognizer::set_enable_speaker_context`]:
+    ///     crate::asr::v3::SpeechRecognizer::set_enable_speaker_context
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker_continue: Option<SpeakerContinue>,
+}
+
+/// Speaker-context handshake result carried by the first response of a
+/// session that enabled the speaker context (v3
+/// `set_enable_speaker_context`). `None` when the session did not enable it.
+///
+/// Persist [`SpeakerContinue::speaker_context_id`] on the client side and pass
+/// it back through `set_speaker_context_id` when reconnecting within its
+/// lifetime (24h by default); the response of a later session is
+/// authoritative, so always overwrite the stored value. Wait for the first
+/// response before sending audio: in sync mode with a stored id the server
+/// answers only after the stored snapshot has been applied.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SpeakerContinue {
+    /// `fresh` / `resumed` / `degraded` / `disabled` (see
+    /// [`crate::asr::v3::CONTINUE_STATUS_FRESH`] and friends). Empty in async
+    /// mode, where the server answers before the snapshot is loaded; unknown
+    /// values mean "no information".
+    #[serde(default, rename = "continue_status")]
+    pub continue_status: String,
+
+    /// Opaque id of this speaker session; pass it back to resume the same
+    /// speaker identities. It is not a credential and is scoped to the
+    /// SdkAppID that issued it.
+    #[serde(default, rename = "speaker_context_id")]
+    pub speaker_context_id: String,
 }
 
 /// Recognition result details carried by a realtime response.

@@ -40,13 +40,15 @@ use uuid::Uuid;
 
 use crate::common::errors::{
     AsrError, Result, ERR_CODE_ALREADY_STARTED, ERR_CODE_AUTH_FAILED, ERR_CODE_CONNECT_FAILED,
-    ERR_CODE_NOT_STARTED, ERR_CODE_READ_FAILED, ERR_CODE_WRITE_FAILED,
+    ERR_CODE_INVALID_PARAM, ERR_CODE_NOT_STARTED, ERR_CODE_READ_FAILED, ERR_CODE_WRITE_FAILED,
 };
 use crate::common::signature::{SignatureParams, SpeakerRole};
-use crate::common::{resolve_ws_endpoint, usersig, Credential};
+use crate::common::{
+    resolve_ws_endpoint, usersig, Credential, SPEAKER_CONTEXT_ASYNC, SPEAKER_CONTEXT_SYNC,
+};
 
 use super::params::{validate_enum_option, validate_speaker_diarization, validate_vad_tuning};
-use super::types::SpeechRecognitionResponse;
+use super::types::{SpeakerContinue, SpeechRecognitionResponse};
 
 /// Production WebSocket endpoint for the TRTC-ASR service.
 pub const ENDPOINT: &str = "wss://asr.cloud-rtc.com";
@@ -198,6 +200,9 @@ pub(crate) struct Shared {
     /// The resolved voice ID for the running session (generated when the user
     /// did not set one).
     voice_id: Mutex<String>,
+    /// Speaker-context handshake result of the first response (v3 only; see
+    /// [`Shared::set_speaker_continue`]).
+    speaker_continue: Mutex<Option<SpeakerContinue>>,
 }
 
 impl Shared {
@@ -206,6 +211,12 @@ impl Shared {
     }
     pub(crate) fn voice_id(&self) -> String {
         self.voice_id.lock().unwrap().clone()
+    }
+    pub(crate) fn set_speaker_continue(&self, value: Option<SpeakerContinue>) {
+        *self.speaker_continue.lock().unwrap() = value;
+    }
+    pub(crate) fn speaker_continue(&self) -> Option<SpeakerContinue> {
+        self.speaker_continue.lock().unwrap().clone()
     }
 }
 
@@ -469,6 +480,8 @@ pub struct SpeechRecognizer {
     input_sample_rate: i32,
     speaker_diarization: i32,
     speaker_number: i32,
+    enable_speaker_context: i32,
+    speaker_context_id: String,
     speaker_roles: Vec<SpeakerRole>,
     voiceprint_ids: Vec<String>,
     voice_id: String,
@@ -478,6 +491,8 @@ pub struct SpeechRecognizer {
     stop_timeout: Duration,
 
     shared: Arc<Shared>,
+    /// start() 后保留一份句柄，供 getter 读取 reader 捕获的握手结果。
+    retained_shared: Arc<Shared>,
 }
 
 /// Creates the runtime state shared between the API threads and the reader
@@ -498,6 +513,7 @@ pub(crate) fn new_shared() -> Arc<Shared> {
         stop_timeout: Mutex::new(DEFAULT_STOP_TIMEOUT),
         finish_once: Once::new(),
         voice_id: Mutex::new(String::new()),
+        speaker_continue: Mutex::new(None),
     })
 }
 
@@ -526,6 +542,7 @@ impl SpeechRecognizer {
         engine_model_type: impl Into<String>,
         listener: Arc<dyn SpeechRecognitionListener>,
     ) -> Self {
+        let shared = new_shared();
         SpeechRecognizer {
             credential,
             listener,
@@ -550,13 +567,16 @@ impl SpeechRecognizer {
             input_sample_rate: 0,
             speaker_diarization: 0,
             speaker_number: 0,
+            enable_speaker_context: 0,
+            speaker_context_id: String::new(),
             speaker_roles: Vec::new(),
             voiceprint_ids: Vec::new(),
             voice_id: String::new(),
             language: String::new(),
             write_timeout: DEFAULT_WRITE_TIMEOUT,
             stop_timeout: DEFAULT_STOP_TIMEOUT,
-            shared: new_shared(),
+            shared: Arc::clone(&shared),
+            retained_shared: shared,
         }
     }
 
@@ -690,6 +710,32 @@ impl SpeechRecognizer {
         self.speaker_number = n;
     }
 
+    /// Makes the diarization session resumable ("说话人分离断点续传"): the
+    /// server stores the settled speaker anchors and hands back an opaque
+    /// speaker_context_id on the first response, which a later connection
+    /// passes to [`set_speaker_context_id`](Self::set_speaker_context_id) to
+    /// keep the same speakers on the same ids.
+    ///
+    /// - [`SPEAKER_CONTEXT_SYNC`](crate::common::SPEAKER_CONTEXT_SYNC) (1): the
+    ///   first response waits for the stored snapshot and reports
+    ///   continue_status (fresh/resumed/...)
+    /// - [`SPEAKER_CONTEXT_ASYNC`](crate::common::SPEAKER_CONTEXT_ASYNC) (2):
+    ///   the first response answers immediately with the id only; the restore
+    ///   happens in the background
+    ///
+    /// Requires [`set_speaker_diarization`](Self::set_speaker_diarization)(1)
+    /// or (3); `start` fails locally otherwise.
+    pub fn set_enable_speaker_context(&mut self, mode: i32) {
+        self.enable_speaker_context = mode;
+    }
+
+    /// Passes back the speaker_context_id returned by a previous session (see
+    /// [`SpeakerContinue`](crate::asr::types::SpeakerContinue)). Expired or
+    /// unknown ids simply start a new session instead of failing.
+    pub fn set_speaker_context_id(&mut self, id: impl Into<String>) {
+        self.speaker_context_id = id.into().trim().to_string();
+    }
+
     /// Registers temporary voiceprints for this session. Only used with
     /// voiceprint diarization mode.
     pub fn set_speaker_roles(&mut self, roles: Vec<SpeakerRole>) {
@@ -748,6 +794,16 @@ impl SpeechRecognizer {
     /// Takes `&self` (not `&mut self`) so a recognizer shared via `Arc` can be
     /// started after being captured by its own listener — required for
     /// callbacks that call [`stop`](Self::stop).
+    /// Returns the resumable-diarization handshake carried by the first
+    /// server response, or `None` when the session did not enable
+    /// `set_enable_speaker_context`. v2 synthesizes `on_recognition_start`
+    /// locally before that response arrives, so unlike v3 this value cannot
+    /// be read from the start callback - poll it or read it after the
+    /// first result callbacks.
+    pub fn speaker_continue(&self) -> Option<SpeakerContinue> {
+        self.retained_shared.speaker_continue()
+    }
+
     pub fn start(&self) -> Result<()> {
         let cas = self.shared.state.compare_exchange(
             STATE_IDLE,
@@ -795,6 +851,23 @@ impl SpeechRecognizer {
             &self.speaker_roles,
             &self.voiceprint_ids,
         )?;
+        match self.enable_speaker_context {
+            0 | SPEAKER_CONTEXT_SYNC | SPEAKER_CONTEXT_ASYNC => {}
+            other => {
+                return Err(AsrError::new(
+                    ERR_CODE_INVALID_PARAM,
+                    format!(
+                        "EnableSpeakerContext must be 0 (off), 1 (sync) or 2 (async), got {other}"
+                    ),
+                ));
+            }
+        }
+        if self.enable_speaker_context != 0 && self.speaker_diarization == 0 {
+            return Err(AsrError::new(
+                ERR_CODE_INVALID_PARAM,
+                "EnableSpeakerContext requires set_speaker_diarization(1) or (3)",
+            ));
+        }
         validate_vad_tuning(self.vad_level, self.noise_threshold)?;
         if let Some(v) = self.filter_empty_result {
             validate_enum_option("FilterEmptyResult", v, &[0, 1])?;
@@ -1012,6 +1085,8 @@ impl SpeechRecognizer {
         p.input_sample_rate = self.input_sample_rate;
         p.speaker_diarization = self.speaker_diarization;
         p.speaker_number = self.speaker_number;
+        p.enable_speaker_context = self.enable_speaker_context;
+        p.speaker_context_id = self.speaker_context_id.clone();
         p.speaker_roles = self.speaker_roles.clone();
         p.voiceprint_ids = self.voiceprint_ids.clone();
         p.language = self.language.clone();
@@ -1128,6 +1203,10 @@ fn read_loop_inner(
             code: 0,
             message: "success".to_string(),
             voice_id: voice_id.to_string(),
+            // The ack itself is consumed by the handshake; re-attach the
+            // speaker context it carried so callback-style callers see the
+            // id/status (v3 only; None elsewhere).
+            speaker_continue: shared.speaker_continue(),
             ..Default::default()
         },
         &|l, r| l.on_recognition_start(r),
@@ -1242,6 +1321,12 @@ fn read_loop_inner(
                 continue;
             }
         };
+
+        if let Some(sc) = resp.speaker_continue.clone() {
+            // 首响应携带断点续传握手结果；v2 的 on_recognition_start 在建连
+            // 时本地合成（早于本帧），只能经 getter 读取。
+            shared.set_speaker_continue(Some(sc));
+        }
 
         if resp.code != 0 {
             shared.finish();

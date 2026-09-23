@@ -241,6 +241,11 @@ pub struct RecordingListener {
     pub complete_count: Mutex<usize>,
     pub fail_count: Mutex<usize>,
     pub events: Mutex<Vec<String>>,
+    /// speaker_continue.speaker_context_id carried by each on_recognition_start
+    /// (None when the server sent no speaker_continue).
+    pub start_speaker_context_ids: Mutex<Vec<Option<String>>>,
+    /// speaker_continue.continue_status of each on_recognition_start.
+    pub start_continue_statuses: Mutex<Vec<Option<String>>>,
 }
 
 impl RecordingListener {
@@ -260,6 +265,16 @@ impl trtc_asr_sdk::asr::SpeechRecognitionListener for RecordingListener {
             .lock()
             .unwrap()
             .push(format!("start:{}", r.voice_id));
+        self.start_speaker_context_ids.lock().unwrap().push(
+            r.speaker_continue
+                .as_ref()
+                .map(|sc| sc.speaker_context_id.clone()),
+        );
+        self.start_continue_statuses.lock().unwrap().push(
+            r.speaker_continue
+                .as_ref()
+                .map(|sc| sc.continue_status.clone()),
+        );
     }
     fn on_sentence_begin(&self, r: &trtc_asr_sdk::asr::SpeechRecognitionResponse) {
         *self.sentence_begin_count.lock().unwrap() += 1;

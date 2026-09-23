@@ -12,9 +12,13 @@ use tungstenite::Message;
 
 use trtc_asr_sdk::asr::v3::{
     new_credential, Context, ContextKV, SpeakerRole, SpeechRecognizer,
-    SPEAKER_DIARIZATION_VOICEPRINT,
+    CONTINUE_STATUS_FRESH, CONTINUE_STATUS_RESUMED, SPEAKER_CONTEXT_ASYNC, SPEAKER_CONTEXT_SYNC,
+    SPEAKER_DIARIZATION_CLUSTER, SPEAKER_DIARIZATION_VOICEPRINT,
 };
 use trtc_asr_sdk::common::errors::{ERR_CODE_ALREADY_STARTED, ERR_CODE_INVALID_PARAM};
+
+/// A 64-hex speaker_context_id, as issued by the server.
+const CONTEXT_ID: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 fn test_credential() -> trtc_asr_sdk::common::Credential {
     new_credential(1400000000, "test-secret")
@@ -23,6 +27,21 @@ fn test_credential() -> trtc_asr_sdk::common::Credential {
 fn ack(voice_id: &str) -> Message {
     Message::text(
         serde_json::json!({"code": 0, "message": "success", "voice_id": voice_id}).to_string(),
+    )
+}
+
+/// An ack carrying the speaker-context handshake result.
+fn ack_with_speaker_continue(voice_id: &str, continue_status: Option<&str>) -> Message {
+    let mut speaker_continue = serde_json::json!({"speaker_context_id": CONTEXT_ID});
+    if let Some(status) = continue_status {
+        speaker_continue["continue_status"] = serde_json::Value::String(status.to_string());
+    }
+    Message::text(
+        serde_json::json!({
+            "code": 0, "message": "success", "voice_id": voice_id,
+            "speaker_continue": speaker_continue,
+        })
+        .to_string(),
     )
 }
 
@@ -87,6 +106,8 @@ fn start_frame_wire_format() {
         audio_url: "https://example.com/t.wav".into(),
     }]);
     r.set_voiceprint_ids(vec!["vp-1".into()]);
+    r.set_enable_speaker_context(SPEAKER_CONTEXT_SYNC);
+    r.set_speaker_context_id(CONTEXT_ID);
     r.set_context(Context {
         text: "bg".into(),
         terms: vec!["ASR".into()],
@@ -149,6 +170,9 @@ fn start_frame_wire_format() {
     assert_eq!(params["hotword_list"], "深度学习|10");
     assert_eq!(params["speaker_diarization"], 3);
     assert_eq!(params["voiceprint_ids"], serde_json::json!(["vp-1"]));
+    // Speaker context ("断点续传"): the mode and the id travel in params.
+    assert_eq!(params["enable_speaker_context"], SPEAKER_CONTEXT_SYNC);
+    assert_eq!(params["speaker_context_id"], CONTEXT_ID);
     // speaker_roles elements are snake_case, not the v2 CamelCase wire.
     assert_eq!(
         params["speaker_roles"],
@@ -162,6 +186,110 @@ fn start_frame_wire_format() {
         })
     );
     assert_eq!(params["sdk_info"]["sdk_lang"], "rust");
+}
+
+/// The first response's speaker_continue block reaches both
+/// `speaker_continue()` and `on_recognition_start`, and a session that did not
+/// enable the context sends no context params and sees no result.
+#[test]
+fn speaker_continue_handshake() {
+    // (continue_status in the ack, enable mode, expected status, expects id)
+    let cases: Vec<(Option<&str>, i32, Option<&str>, bool)> = vec![
+        (
+            Some(CONTINUE_STATUS_RESUMED),
+            SPEAKER_CONTEXT_SYNC,
+            Some(CONTINUE_STATUS_RESUMED),
+            true,
+        ),
+        (
+            Some(CONTINUE_STATUS_FRESH),
+            SPEAKER_CONTEXT_SYNC,
+            Some(CONTINUE_STATUS_FRESH),
+            true,
+        ),
+        // Async mode answers before the snapshot is applied: id only.
+        (None, SPEAKER_CONTEXT_ASYNC, Some(""), true),
+        (None, 0, None, false),
+    ];
+
+    for (ack_status, mode, want_status, expect_id) in cases {
+        let start_frames: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let sf = Arc::clone(&start_frames);
+        let server = MockWsServer::start(move |mut ws| {
+            if let Ok(Message::Text(t)) = ws.read() {
+                sf.lock().unwrap().push(t.to_string());
+            }
+            // The server only emits speaker_continue when the session asked
+            // for the speaker context.
+            let ack_msg = if mode == 0 {
+                ack("v1")
+            } else {
+                ack_with_speaker_continue("v1", ack_status)
+            };
+            let _ = ws.send(ack_msg);
+            loop {
+                match ws.read() {
+                    Ok(Message::Text(t)) if t.contains("\"end\"") => break,
+                    Ok(_) => continue,
+                    Err(_) => return,
+                }
+            }
+            let _ = ws.send(result_frame(2, 1, "done"));
+            while ws.read().is_ok() {}
+        });
+
+        let listener = Arc::new(RecordingListener::new());
+        let listener_dyn: Arc<dyn trtc_asr_sdk::asr::SpeechRecognitionListener> = listener.clone();
+        let mut r = SpeechRecognizer::new(test_credential(), "16k_zh_en", listener_dyn);
+        r.set_endpoint(&server.url);
+        if mode != 0 {
+            r.set_speaker_diarization(SPEAKER_DIARIZATION_CLUSTER);
+            r.set_enable_speaker_context(mode);
+        } else {
+            // A stored id must not ride along when the mode stays off.
+            r.set_speaker_context_id(CONTEXT_ID);
+        }
+        r.set_write_timeout(Duration::from_millis(500));
+        r.set_stop_timeout(Duration::from_secs(2));
+
+        r.start().expect("start should ack synchronously");
+
+        // The getter is usable as soon as start() returns.
+        match r.speaker_continue() {
+            None => assert!(!expect_id, "context off must yield no handshake result"),
+            Some(sc) => {
+                assert!(expect_id, "missing handshake result for mode {mode}");
+                assert_eq!(sc.speaker_context_id, CONTEXT_ID);
+                assert_eq!(sc.continue_status, want_status.unwrap_or(""));
+            }
+        }
+
+        r.write(&[0u8; 1280]).expect("write audio");
+        r.stop().expect("stop");
+        assert!(wait_until(Duration::from_secs(3), || {
+            RecordingListener::count(&listener.complete_count) > 0
+        }));
+
+        // The same block is delivered on on_recognition_start.
+        let delivered = listener.start_speaker_context_ids.lock().unwrap().clone();
+        assert_eq!(delivered.len(), 1, "on_recognition_start must fire once");
+        if expect_id {
+            assert_eq!(delivered[0].as_deref(), Some(CONTEXT_ID));
+        } else {
+            assert_eq!(delivered[0], None);
+        }
+
+        // Wire: the context params are only sent when the caller opted in.
+        let frames = start_frames.lock().unwrap();
+        let params: serde_json::Value = serde_json::from_str(&frames[0]).unwrap();
+        let params = &params["params"];
+        if mode == 0 {
+            assert!(params.get("enable_speaker_context").is_none());
+            assert!(params.get("speaker_context_id").is_none());
+        } else {
+            assert_eq!(params["enable_speaker_context"], mode);
+        }
+    }
 }
 
 #[test]
@@ -326,6 +454,17 @@ fn local_validation_rejects_out_of_range_options() {
         (
             "diarization invalid",
             Box::new(|r| r.set_speaker_diarization(2)),
+        ),
+        (
+            "enable_speaker_context invalid",
+            Box::new(|r| {
+                r.set_speaker_diarization(SPEAKER_DIARIZATION_CLUSTER);
+                r.set_enable_speaker_context(3);
+            }),
+        ),
+        (
+            "enable_speaker_context without diarization",
+            Box::new(|r| r.set_enable_speaker_context(SPEAKER_CONTEXT_SYNC)),
         ),
     ];
     for (name, apply) in cases {

@@ -64,6 +64,26 @@ pub const SPEAKER_DIARIZATION_OFF: i32 = 0;
 pub const SPEAKER_DIARIZATION_CLUSTER: i32 = 1;
 pub const SPEAKER_DIARIZATION_VOICEPRINT: i32 = 3;
 
+/// Speaker-context ("断点续传") modes for enable_speaker_context. They turn
+/// speaker diarization into a resumable session: the server stores the stable
+/// speaker anchors and hands back an opaque speaker_context_id, which a later
+/// connection passes back to keep the same speakers on the same ids. Both
+/// modes require speaker diarization.
+pub const SPEAKER_CONTEXT_OFF: i32 = 0;
+/// Sync: with a stored id the first response waits for the snapshot.
+pub const SPEAKER_CONTEXT_SYNC: i32 = 1;
+/// Async: the first response answers immediately (id only, no status).
+pub const SPEAKER_CONTEXT_ASYNC: i32 = 2;
+
+/// `continue_status` values of [`crate::asr::types::SpeakerContinue`].
+pub const CONTINUE_STATUS_FRESH: &str = "fresh";
+/// `continue_status` values of [`crate::asr::types::SpeakerContinue`].
+pub const CONTINUE_STATUS_RESUMED: &str = "resumed";
+/// `continue_status` values of [`crate::asr::types::SpeakerContinue`].
+pub const CONTINUE_STATUS_DEGRADED: &str = "degraded";
+/// `continue_status` values of [`crate::asr::types::SpeakerContinue`].
+pub const CONTINUE_STATUS_DISABLED: &str = "disabled";
+
 const MAX_AUDIO_SIZE: usize = 3 * 1024 * 1024;
 const MAX_FILE_SIZE: usize = 5 * 1024 * 1024;
 
@@ -74,6 +94,12 @@ const STREAM_FRAME_MAX_BYTES: usize = 256 * 1024;
 /// ack timeout: how long `start` waits for the server's start-frame
 /// acknowledgement.
 const ACK_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Replaces [`ACK_TIMEOUT`] while resuming a speaker context (sync mode + a
+/// stored speaker_context_id): the first response is delayed until the server
+/// has loaded the stored speaker snapshot and restored it in the diarization
+/// session.
+const SPEAKER_CONTEXT_ACK_TIMEOUT: Duration = Duration::from_secs(15);
 
 // Server-side accepted ranges (asr-proxy validator_v3.go).
 const MAX_VOICE_ID_LEN: usize = 128;
@@ -881,6 +907,14 @@ pub struct OnlineParams {
     pub speaker_diarization: i32,
     #[serde(skip_serializing_if = "is_zero")]
     pub speaker_number: i32,
+    /// 1 (sync) / 2 (async) make the diarization session resumable; 0 is
+    /// omitted from the wire.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub enable_speaker_context: i32,
+    /// Opaque id issued by a previous session; only meaningful together with
+    /// `enable_speaker_context`.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub speaker_context_id: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub voiceprint_ids: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -1029,6 +1063,44 @@ impl SpeechRecognizer {
     pub fn set_voiceprint_ids(&mut self, ids: Vec<String>) {
         self.params.borrow_mut().voiceprint_ids = ids;
     }
+
+    /// Makes the speaker-diarization session resumable ("说话人分离断点续传")
+    /// and selects how the server reports the handshake:
+    ///
+    /// * [`SPEAKER_CONTEXT_OFF`] (0, default): nothing is saved or returned,
+    ///   and [`Self::set_speaker_context_id`] is ignored.
+    /// * [`SPEAKER_CONTEXT_SYNC`] (1): the first response waits for the stored
+    ///   snapshot to be applied and reports the outcome through
+    ///   [`crate::asr::types::SpeakerContinue::continue_status`].
+    /// * [`SPEAKER_CONTEXT_ASYNC`] (2): the first response answers immediately
+    ///   with the speaker_context_id only (no status) — keeps reconnects fast.
+    ///
+    /// Requires `set_speaker_diarization(1)` or `(3)`. See
+    /// [`crate::asr::types::SpeakerContinue`] for the reconnect workflow.
+    pub fn set_enable_speaker_context(&mut self, mode: i32) {
+        self.params.borrow_mut().enable_speaker_context = mode;
+    }
+
+    /// Passes back the speaker_context_id returned by a previous session
+    /// ([`crate::asr::types::SpeakerContinue::speaker_context_id`]) so this
+    /// session resumes the same speaker identities instead of numbering
+    /// speakers from scratch.
+    ///
+    /// Only effective together with
+    /// [`Self::set_enable_speaker_context`]`(1)` or `(2)`. The server ignores
+    /// an expired or unknown id and starts a new session, so a stale value
+    /// does not fail the connection; always overwrite the stored id with the
+    /// one returned by the latest first response.
+    pub fn set_speaker_context_id(&mut self, id: impl Into<String>) {
+        self.params.borrow_mut().speaker_context_id = id.into().trim().to_string();
+    }
+
+    /// Speaker-context result carried by the first response, or `None` when
+    /// the session did not enable the speaker context. Available once
+    /// [`Self::start`] returns; also delivered to `on_recognition_start`.
+    pub fn speaker_continue(&self) -> Option<crate::asr::types::SpeakerContinue> {
+        self.shared.speaker_continue()
+    }
     pub fn set_voice_id(&mut self, id: impl Into<String>) {
         self.voice_id = id.into();
     }
@@ -1077,6 +1149,7 @@ impl SpeechRecognizer {
             &p.speaker_roles,
             &p.voiceprint_ids,
         )?;
+        validate_speaker_context(p.enable_speaker_context, p.speaker_diarization)?;
         validate_vad_tuning(p.vad_level, p.noise_threshold)?;
         if p.max_speak_time != 0
             && (p.max_speak_time < MIN_MAX_SPEAK_TIME || p.max_speak_time > MAX_MAX_SPEAK_TIME)
@@ -1124,6 +1197,11 @@ impl SpeechRecognizer {
         let mut online = self.params.borrow().clone();
         online.voice_id = voice_id.to_string();
         online.engine_model_type = self.engine_model_type.clone();
+        if online.enable_speaker_context == 0 {
+            // A stored id is ignored unless the caller opted in. serde would
+            // still emit a non-empty string, which the other SDKs omit.
+            online.speaker_context_id.clear();
+        }
         let mut params = serde_json::to_value(&online).map_err(|e| {
             AsrError::new(ERR_CODE_READ_FAILED, format!("marshal params failed: {e}"))
         })?;
@@ -1224,8 +1302,10 @@ impl SpeechRecognizer {
         }
 
         // Wait for the ack. A failure arrives as a structured error frame
-        // ({code,message,voice_id}) followed by a normal close.
-        let deadline = Instant::now() + ACK_TIMEOUT;
+        // ({code,message,voice_id}) followed by a normal close. Resuming a
+        // speaker context in sync mode makes the server apply the stored
+        // snapshot before answering, so that path gets a longer budget.
+        let deadline = Instant::now() + self.ack_timeout();
         loop {
             let read_result = {
                 let mut guard = self.shared.ws.lock().unwrap();
@@ -1265,6 +1345,19 @@ impl SpeechRecognizer {
                             message,
                         ));
                     }
+                    // speaker_continue is present only when the session
+                    // enabled the speaker context; it carries the id to
+                    // persist for a later resume. Unknown shapes are ignored.
+                    self.shared.set_speaker_continue(
+                        ack.get("speaker_continue")
+                            .filter(|v| v.is_object())
+                            .and_then(|v| {
+                                serde_json::from_value::<crate::asr::types::SpeakerContinue>(
+                                    v.clone(),
+                                )
+                                .ok()
+                            }),
+                    );
                     // The ack frame never carries a result per the protocol
                     // (the worker acks before recognition starts); a
                     // defensive ack-with-result is consumed here.
@@ -1301,6 +1394,17 @@ impl SpeechRecognizer {
                 }
             }
         }
+    }
+
+    /// How long the handshake waits for the first response. Resuming a
+    /// speaker context in sync mode makes the server apply the stored
+    /// snapshot before answering; every other case answers immediately.
+    fn ack_timeout(&self) -> Duration {
+        let p = self.params.borrow();
+        if p.enable_speaker_context == SPEAKER_CONTEXT_SYNC && !p.speaker_context_id.is_empty() {
+            return SPEAKER_CONTEXT_ACK_TIMEOUT;
+        }
+        ACK_TIMEOUT
     }
 
     /// Initiates the WebSocket connection, sends the start frame and waits
@@ -1467,6 +1571,35 @@ impl SpeechRecognizer {
             .map(|guard| *guard == Some(tid))
             .unwrap_or(false)
     }
+}
+
+/// Checks the speaker-context ("断点续传") options.
+///
+/// enable_speaker_context accepts 0 (off), 1 (sync) or 2 (async); the server
+/// silently normalizes anything else to off, but a caller that meant to enable
+/// resumption is better served by an immediate error than by a session that
+/// quietly never returns a speaker_context_id.
+///
+/// The server ignores the speaker-context parameters entirely when speaker
+/// diarization is off, so that combination is a caller mistake as well
+/// (mirroring how roles/voiceprint ids require mode 3).
+///
+/// speaker_context_id itself is not format-checked on purpose: the server
+/// treats an unknown or expired id as "start a new session", so a stale value
+/// degrades gracefully instead of failing the connection.
+fn validate_speaker_context(mode: i32, diarization: i32) -> Result<()> {
+    if ![SPEAKER_CONTEXT_OFF, SPEAKER_CONTEXT_SYNC, SPEAKER_CONTEXT_ASYNC].contains(&mode) {
+        return Err(invalid_param(&format!(
+            "EnableSpeakerContext must be 0 (off), 1 (sync) or 2 (async), got {}",
+            mode
+        )));
+    }
+    if mode != SPEAKER_CONTEXT_OFF && diarization == SPEAKER_DIARIZATION_OFF {
+        return Err(invalid_param(
+            "EnableSpeakerContext requires SpeakerDiarization=1 or 3",
+        ));
+    }
+    Ok(())
 }
 
 /// v3-speaker-diarization validation (roles use the snake_case wire fields

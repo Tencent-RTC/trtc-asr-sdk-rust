@@ -10,7 +10,7 @@ use std::time::Duration;
 use common::{MockHttpResponse, MockHttpServer};
 
 use trtc_asr_sdk::asr::v3::{
-    new_credential, AudioURLItem, Context, CreateTranscriptionRequest, FileRecognizer,
+    new_credential, AudioURLItem, CreateTranscriptionRequest, FileRecognizer,
     SentenceRecognizer, SpeakerRole, TranscribeRequest, SOURCE_TYPE_DATA, SOURCE_TYPE_URL,
     SPEAKER_DIARIZATION_CLUSTER, SPEAKER_DIARIZATION_VOICEPRINT, TASK_STATUS_SUCCESS,
 };
@@ -53,10 +53,7 @@ fn transcribe_wire_format() {
         assert_eq!(params["word_info"], 1);
         assert_eq!(params["input_sample_rate"], 8000);
         assert_eq!(params["customization_id"], "cust-1");
-        assert_eq!(
-            params["context"],
-            serde_json::json!({"text": "bg", "terms": ["ASR"]})
-        );
+        assert!(params.get("context").is_none());
         assert_eq!(params["sdk_info"]["sdk_lang"], "rust");
         // snake_case everywhere — v1 PascalCase names must not appear.
         for bad in ["EngSerViceType", "SourceType", "VoiceFormat", "Data", "Url"] {
@@ -88,11 +85,6 @@ fn transcribe_wire_format() {
             filter_punc: 1,
             input_sample_rate: 8000,
             customization_id: "cust-1".into(),
-            context: Some(Context {
-                text: "bg".into(),
-                terms: vec!["ASR".into()],
-                general: vec![],
-            }),
             ..Default::default()
         })
         .expect("transcribe");

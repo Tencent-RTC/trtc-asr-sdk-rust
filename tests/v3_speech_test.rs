@@ -11,7 +11,7 @@ use common::{wait_until, MockWsServer, RecordingListener};
 use tungstenite::Message;
 
 use trtc_asr_sdk::asr::v3::{
-    new_credential, Context, ContextKV, SpeakerRole, SpeechRecognizer,
+    new_credential, SpeakerRole, SpeechRecognizer,
     CONTINUE_STATUS_FRESH, CONTINUE_STATUS_RESUMED, SPEAKER_CONTEXT_ASYNC, SPEAKER_CONTEXT_SYNC,
     SPEAKER_DIARIZATION_CLUSTER, SPEAKER_DIARIZATION_VOICEPRINT,
 };
@@ -108,14 +108,6 @@ fn start_frame_wire_format() {
     r.set_voiceprint_ids(vec!["vp-1".into()]);
     r.set_enable_speaker_context(SPEAKER_CONTEXT_SYNC);
     r.set_speaker_context_id(CONTEXT_ID);
-    r.set_context(Context {
-        text: "bg".into(),
-        terms: vec!["ASR".into()],
-        general: vec![ContextKV {
-            key: "domain".into(),
-            value: "Meeting".into(),
-        }],
-    });
     r.set_write_timeout(Duration::from_millis(500));
     r.set_stop_timeout(Duration::from_secs(2));
 
@@ -178,13 +170,7 @@ fn start_frame_wire_format() {
         params["speaker_roles"],
         serde_json::json!([{"role_name": "teacher", "audio_url": "https://example.com/t.wav"}])
     );
-    assert_eq!(
-        params["context"],
-        serde_json::json!({
-            "text": "bg", "terms": ["ASR"],
-            "general": [{"key": "domain", "value": "Meeting"}]
-        })
-    );
+    assert!(params.get("context").is_none());
     assert_eq!(params["sdk_info"]["sdk_lang"], "rust");
 }
 

@@ -133,24 +133,6 @@ pub struct SpeakerRole {
     pub audio_url: String,
 }
 
-/// Recognition context, aligned with Soniox / Volcengine semantics.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct Context {
-    #[serde(skip_serializing_if = "String::is_empty", default)]
-    pub text: String,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub terms: Vec<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub general: Vec<ContextKV>,
-}
-
-/// A domain key-value pair of [`Context::general`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ContextKV {
-    pub key: String,
-    pub value: String,
-}
-
 /// One audio piece of a distributed recording task.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AudioURLItem {
@@ -374,8 +356,6 @@ pub struct TranscribeRequest {
     pub speaker_diarization: i32,
     #[serde(skip_serializing_if = "is_zero")]
     pub speaker_number: i32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub context: Option<Context>,
 }
 
 /// The flat /v3/transcribe response.
@@ -593,8 +573,6 @@ pub struct CreateTranscriptionRequest {
     pub noise_threshold: Option<f64>,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub language: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub context: Option<Context>,
 }
 
 /// One sentence of a describe_transcription result.
@@ -919,8 +897,6 @@ pub struct OnlineParams {
     pub voiceprint_ids: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub speaker_roles: Vec<SpeakerRole>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub context: Option<Context>,
     /// SDK telemetry: the gateway replays the start frame byte-for-byte to
     /// the worker, which ignores unknown keys, so it survives in server-side
     /// dumps without disturbing the protocol.
@@ -1106,9 +1082,6 @@ impl SpeechRecognizer {
     }
     pub fn set_language(&mut self, lang: impl Into<String>) {
         self.params.borrow_mut().language = lang.into();
-    }
-    pub fn set_context(&mut self, context: Context) {
-        self.params.borrow_mut().context = Some(context);
     }
 
     /// Sets the timeout for a single audio write (clamped to [50ms, 30s]).
